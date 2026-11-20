@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
-from scripts import gap_wheels
+from scripts import build_tool_lock, gap_wheels
 
 
 def row(name, version, target, **over):
@@ -39,6 +39,47 @@ BUILDS = {
 }
 
 
+
+def example_lock(job):
+    name, version, target = job["name"], job["version"], job["target"]
+    project = build_tool_lock.canonical(name)
+    wheel_name = "setuptools-80.0.0-py3-none-any.whl"
+    sdist = f"{name}-{version}.tar.gz"
+    return {"schema": 1, "name": project, "version": version, "target": target,
+            "sdist": sdist, "sdist_url": f"https://files.pythonhosted.org/packages/x/{sdist}",
+            "sdist_sha256": "a" * 64,
+            "wheels": [{"name": "pip", "version": "26.3", "filename": "pip-26.3-py3-none-any.whl",
+                        "url": "https://files.pythonhosted.org/packages/x/pip-26.3-py3-none-any.whl",
+                        "sha256": "f" * 64},
+                       {"name": "setuptools", "version": "80.0.0", "filename": wheel_name,
+                        "url": f"https://files.pythonhosted.org/packages/x/{wheel_name}", "sha256": "e" * 64}],
+            "repair_wheels": [
+                {"name": n, "version": v, "filename": f"{n}-{v}-py3-none-any.whl",
+                 "url": f"https://files.pythonhosted.org/packages/x/{n}-{v}-py3-none-any.whl",
+                 "sha256": "d" * 64}
+                for n, v in [("pip", "26.3"), ("auditwheel", "6.8.2"), ("patchelf", "0.19.1.0")]
+            ] if ("linux-" in target or "musl-" in target) else []}
+
+
+def example_tools(job):
+    lock = example_lock(job)
+    return {"lock_sha256": build_tool_lock.digest(lock),
+            "packages": gap_wheels.expected_packages(lock),
+            "repair_packages": gap_wheels.expected_packages({"wheels": lock["repair_wheels"]}),
+            "repair_tools": gap_wheels.expected_repair_tools(job["target"]), "python": "3.14.10",
+            "python_build": "3.14.10 (test)", "runner_image": "mock-runner-version",
+            "compiler": {"cc": "cl 19.0", "link": "link 14.0", "rustc": "", "cmake": ""}}
+
+
+def attach_locks(jobs, path=None):
+    pairs = {str(job["id"]): example_lock(job) for job in jobs}
+    for job in jobs:
+        job["lock_sha256"] = build_tool_lock.digest(pairs[str(job["id"])])
+    if path is not None:
+        path.write_text(json.dumps({"schema": 1, "pairs": pairs}))
+    return jobs
+
+
 def good(job, **over):
     platform = {"3.14 win-arm64": "cp314-cp314-win_arm64", "3.14t win-arm64": "cp314-cp314t-win_arm64",
                 "3.14 musl-aarch64": "cp314-cp314-musllinux_1_2_aarch64"}[job["target"]]  # fmt: skip
@@ -54,6 +95,7 @@ def good(job, **over):
         "wheel": f"{job['name']}-{job['version']}-{platform}.whl",
         "sha256": "b" * 64,
         "installs": True if job["attempt"] == 1 else None,
+        "tools": example_tools(job),
     }
     r.update(over)
     return r
@@ -216,7 +258,7 @@ class Merge(unittest.TestCase):
         jobs = gap_wheels.plan(BUILDS, 2)
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            (tmp / "plan.json").write_text(json.dumps(jobs))
+            (tmp / "plan.json").write_text(json.dumps(attach_locks(jobs, tmp / "locks.json")))
             for job in jobs:
                 d = tmp / "results" / f"result-{job['id']}-{job['attempt']}"
                 d.mkdir(parents=True)
@@ -227,7 +269,7 @@ class Merge(unittest.TestCase):
             (big / "result.json").write_text("x" * 20_000)  # not in the plan: never read
             sdists = {"lz4-4.4.5.tar.gz": "a" * 64, "tiktoken-0.14.0.tar.gz": "a" * 64}
             with mock.patch.object(gap_wheels, "pypi_sdists", lambda name, version: sdists):
-                gap_wheels.main(["merge", str(tmp / "results"), "--plan", str(tmp / "plan.json"), "--out",
+                gap_wheels.main(["merge", str(tmp / "results"), "--plan", str(tmp / "plan.json"), "--locks", str(tmp / "locks.json"), "--out",
                                  str(tmp / "manifest.json"), "--summary", str(tmp / "summary.md")])  # fmt: skip
             manifest = json.loads((tmp / "manifest.json").read_text())
             summary = (tmp / "summary.md").read_text()
@@ -238,7 +280,7 @@ class Merge(unittest.TestCase):
     def test_an_oversized_result_is_not_parsed(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "result.json"
-            path.write_text(" " * 20_000 + "{}")
+            path.write_text(" " * (gap_wheels.MAX_RESULT_BYTES + 1) + "{}")
             self.assertEqual(gap_wheels.read_result(path), "too big")
 
 
@@ -325,7 +367,7 @@ class Runs(unittest.TestCase):
         for archive, expected in ((zipped({"result.json": "{}"}), (b"{}", None)), (zipped({"other.json": "{}"}), None),
                                   (zipped({"result.json": "{}", "members.json": "[]"}), (b"{}", b"[]")),
                                   (zipped({"result.json": "{}", "members.json": "x" * 2_000_001}), (b"{}", None)),
-                                  (zipped({"result.json": "x" * 20_000}), None), (b"not a zip", None)):  # fmt: skip
+                                  (zipped({"result.json": "x" * (gap_wheels.MAX_RESULT_BYTES + 1)}), None), (b"not a zip", None)):  # fmt: skip
             with self.subTest(expected), mock.patch.object(gap_wheels, "gh", side_effect=[listing, archive]):
                 self.assertEqual(gap_wheels.fetch_result("o/r", {"id": 7}), expected)
         two = json.dumps({"artifacts": [{"id": 5, "name": "result"}, {"id": 6, "name": "result"}]}).encode()
@@ -337,7 +379,7 @@ class Runs(unittest.TestCase):
         results = {11: good(self.jobs[0]), 12: good(self.jobs[1])}
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            (tmp / "plan.json").write_text(json.dumps(self.jobs))
+            (tmp / "plan.json").write_text(json.dumps(attach_locks(self.jobs, tmp / "locks.json")))
             with (
                 mock.patch.object(gap_wheels, "list_runs", return_value=runs),
                 mock.patch.object(gap_wheels, "fetch_result", lambda repo, run: (json.dumps(results[run["id"]]).encode(), b"{}")),
@@ -349,7 +391,7 @@ class Runs(unittest.TestCase):
                               "0-2": "https://github.com/o/r/actions/runs/12"})  # fmt: skip
             self.assertEqual(json.loads((tmp / "r" / "result-0-2" / "result.json").read_text()), results[12])
             with mock.patch.object(gap_wheels, "pypi_sdists", lambda n, v: {"tiktoken-0.14.0.tar.gz": "a" * 64}):
-                gap_wheels.main(["merge", str(tmp / "r"), "--plan", str(tmp / "plan.json"), "--out", str(tmp / "m.json")])
+                gap_wheels.main(["merge", str(tmp / "r"), "--plan", str(tmp / "plan.json"), "--locks", str(tmp / "locks.json"), "--out", str(tmp / "m.json")])
             wheel = json.loads((tmp / "m.json").read_text())["wheels"][0]
         self.assertEqual(wheel["builds"], ["https://github.com/o/r/actions/runs/11", "https://github.com/o/r/actions/runs/12"])
 
@@ -388,14 +430,14 @@ class Members(unittest.TestCase):
         jobs = gap_wheels.plan(BUILDS, 1, {"tiktoken"})
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            (tmp / "plan.json").write_text(json.dumps(jobs))
+            (tmp / "plan.json").write_text(json.dumps(attach_locks(jobs, tmp / "locks.json")))
             for job in jobs:
                 d = tmp / "r" / f"result-{job['id']}-{job['attempt']}"
                 d.mkdir(parents=True)
                 (d / "result.json").write_text(json.dumps(good(job)))
                 (d / "members.json").write_text("[" * 200_000 + "]" * 200_000)
             with mock.patch.object(gap_wheels, "pypi_sdists", lambda n, v: {"tiktoken-0.14.0.tar.gz": "a" * 64}):
-                gap_wheels.main(["merge", str(tmp / "r"), "--plan", str(tmp / "plan.json"), "--out", str(tmp / "m.json")])
+                gap_wheels.main(["merge", str(tmp / "r"), "--plan", str(tmp / "plan.json"), "--locks", str(tmp / "locks.json"), "--out", str(tmp / "m.json")])
             self.assertEqual(len(json.loads((tmp / "m.json").read_text())["wheels"]), 1)
 
     def test_differing_ignores_untrusted_junk(self):
@@ -408,38 +450,47 @@ class Members(unittest.TestCase):
         jobs = gap_wheels.plan(BUILDS, 1, {"tiktoken"})
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            (tmp / "plan.json").write_text(json.dumps(jobs))
+            (tmp / "plan.json").write_text(json.dumps(attach_locks(jobs, tmp / "locks.json")))
             for job, sha, so in ((jobs[0], "b" * 64, "1" * 64), (jobs[1], "c" * 64, "2" * 64)):
                 d = tmp / "r" / f"result-{job['id']}-{job['attempt']}"
                 d.mkdir(parents=True)
                 (d / "result.json").write_text(json.dumps(good(job, sha256=sha)))
                 (d / "members.json").write_text(json.dumps({"tiktoken/_tiktoken.pyd": so, "tiktoken/core.py": "3" * 64}))
             with mock.patch.object(gap_wheels, "pypi_sdists", lambda n, v: {"tiktoken-0.14.0.tar.gz": "a" * 64}):
-                gap_wheels.main(["merge", str(tmp / "r"), "--plan", str(tmp / "plan.json"), "--out", str(tmp / "m.json"),
+                gap_wheels.main(["merge", str(tmp / "r"), "--plan", str(tmp / "plan.json"), "--locks", str(tmp / "locks.json"), "--out", str(tmp / "m.json"),
                                  "--summary", str(tmp / "s.md")])  # fmt: skip
             self.assertIn("the two builds differ, in `tiktoken/_tiktoken.pyd` |", (tmp / "s.md").read_text())
 
 
 class Dispatch(unittest.TestCase):
     def setUp(self):
-        self.jobs = gap_wheels.plan(BUILDS, 2)
+        self.jobs = attach_locks(gap_wheels.plan(BUILDS, 2))
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.plan = Path(self.tmp.name) / "plan.json"
         self.plan.write_text(json.dumps(self.jobs))
+        self.locks = Path(self.tmp.name) / "locks.json"
+        self.locks.write_text(json.dumps({"schema": 1, "pairs": {
+            str(job["id"]): example_lock(job) for job in self.jobs
+        }}))
         self.calls = []
         sleep = mock.patch.object(gap_wheels.time, "sleep", lambda s: None)
         sleep.start()
         self.addCleanup(sleep.stop)
 
     def run_dispatch(self, tips, runs=list):
+        planned = json.loads(self.plan.read_text(encoding="utf-8"))
+        self.locks.write_text(json.dumps({"schema": 1, "pairs": {
+            str(j["id"]): example_lock(j) for j in planned
+        }}), encoding="utf-8")
+
         def gh(args):
             self.calls.append(args)
             return (next(tips) + "\n").encode() if args[0] == "api" else b""
 
         with mock.patch.object(gap_wheels, "gh", gh), mock.patch.object(gap_wheels, "list_runs", lambda r, s: runs()):
             gap_wheels.main(["dispatch", "--plan", str(self.plan), "--batch", "99-1", "--repo", "o/r", "--sha", SHA,
-                             "--since", "2026-11-16T02:00:00Z", "--parallel", "2"])  # fmt: skip
+                             "--since", "2026-11-16T02:00:00Z", "--locks", str(self.locks), "--parallel", "2"])  # fmt: skip
 
     def started(self):
         return [c for c in self.calls if c[:2] == ["workflow", "run"]]
@@ -454,7 +505,7 @@ class Dispatch(unittest.TestCase):
 
     def test_an_image_build_gets_the_images_interpreter(self):
         jobs = [j for j in gap_wheels.plan(BUILDS, 10) if j["target"] == "3.14 musl-aarch64"]
-        self.plan.write_text(json.dumps(jobs))
+        self.plan.write_text(json.dumps(attach_locks(jobs)))
         self.run_dispatch(iter([SHA] * len(jobs)))
         started = self.started()
         self.assertTrue(started)
@@ -488,7 +539,7 @@ class Dispatch(unittest.TestCase):
 
         with mock.patch.object(gap_wheels, "gh", gh), mock.patch.object(gap_wheels, "list_runs", runs):
             gap_wheels.main(["dispatch", "--plan", str(self.plan), "--batch", "99-1", "--repo", "o/r", "--sha", SHA,
-                             "--since", "2026-11-16T02:00:00Z", "--parallel", "10"])  # fmt: skip
+                             "--since", "2026-11-16T02:00:00Z", "--locks", str(self.locks), "--parallel", "10"])  # fmt: skip
         self.assertEqual(len(made), 4)  # one POST per build, none repeated
 
     def test_retry(self):
@@ -507,14 +558,15 @@ class Dispatch(unittest.TestCase):
 
 class Rotation(unittest.TestCase):
     def test_a_capped_batch_reaches_every_pair_in_turn(self):
-        names = lambda start: [j["name"] for j in gap_wheels.plan(BUILDS, 1, start=start) if j["attempt"] == 1]
+        def names(start):
+            return [j["name"] for j in gap_wheels.plan(BUILDS, 1, start=start) if j["attempt"] == 1]
         everyone = {p["name"] for p in gap_wheels.clean_pairs(BUILDS)}
         self.assertEqual({n for week in range(len(everyone)) for n in names(week)}, everyone)
         self.assertEqual(names(0), names(len(everyone)))  # wraps around
 
     def test_members_too_big_to_list_still_leave_the_result(self):
         def fake_run_build(name, version, attempt, work, members, keep=None, plat=None, tag=None,
-                           platform_pattern=None):
+                           platform_pattern=None, lock=None, lock_sha256=None):
             members.update({f"pkg/f{i}.py": "a" * 64 for i in range(gap_wheels.MAX_MEMBERS + 1)})
             return {"sdist": None, "sdist_sha256": None, "wheel": None, "sha256": None, "installs": None}
 
@@ -522,10 +574,14 @@ class Rotation(unittest.TestCase):
             out = Path(tmp) / "result.json"
             with (
                 mock.patch.object(gap_wheels, "run_build", fake_run_build),
+                mock.patch.object(gap_wheels.build_tool_lock, "load_lock", return_value=example_lock(
+                    {"name": "tiktoken", "version": "0.14.0", "target": "3.14 win-arm64"})),
                 mock.patch.object(gap_wheels.build_lab, "interpreter_problem", lambda target: None),
             ):
                 gap_wheels.main(["build", "--name", "tiktoken", "--version", "0.14.0", "--target", "3.14 win-arm64",
-                                 "--attempt", "1", "--runner", "windows-11-arm", "--out", str(out)])  # fmt: skip
+                                 "--attempt", "1", "--runner", "windows-11-arm",
+                                 "--lock-bundle", "test-lock.json", "--lock-sha256", "e" * 64, "--pair-id", "0",
+                                 "--out", str(out)])  # fmt: skip
             self.assertEqual(json.loads(out.read_text())["name"], "tiktoken")
             self.assertEqual(json.loads((Path(tmp) / "members.json").read_text()), {})
 
@@ -541,6 +597,7 @@ MUSL = "lz4-0.14.0-cp314-cp314-musllinux_1_2_aarch64.whl"
 def verified(name="tiktoken", wheel=WIN, sha="c" * 64, target="3.14 win-arm64"):
     return {"name": name, "version": "0.14.0", "target": target, "wheel": wheel, "sha256": sha,
             "sdist": f"{name}-0.14.0.tar.gz", "sdist_sha256": "a" * 64,
+            "tools": example_tools({"name": name, "version": "0.14.0", "target": target}),
             "builds": ["https://github.com/wheelgap/tracker/actions/runs/11",
                        "https://github.com/wheelgap/tracker/actions/runs/12"]}  # fmt: skip
 
@@ -615,8 +672,7 @@ class Stage(unittest.TestCase):
                  mock.patch.object(gap_wheels, "missing_dlls", return_value=[]), \
                  mock.patch.object(gap_wheels, "fetch_wheel", side_effect=lambda repo, rid: next(archives)):  # fmt: skip
                 gap_wheels.cmd_stage(args)
-            lines = dict(line.split("=", 1) for line in out.read_text().splitlines())
-            staged = json.loads(lines["staged"])
+            staged = json.loads((tmp / "staged" / "staged.json").read_text())
             self.assertEqual([(w["wheel"], w["licence"]) for w in staged], [(WIN, "MIT")])
             self.assertIn("neither PyPI nor its METADATA names an OSI-approved licence", (tmp / "summary.md").read_text())
 
@@ -751,11 +807,11 @@ class Stage(unittest.TestCase):
             fetch.assert_called_once_with("wheelgap/tracker", 11)  # build 1's run
             self.assertEqual((tmp / "staged" / WIN).read_bytes(), data)
             lines = dict(line.split("=", 1) for line in out.read_text().splitlines())
-            staged = json.loads(lines["staged"])
+            staged = json.loads((tmp / "staged" / "staged.json").read_text())
             self.assertEqual([w["wheel"] for w in staged], [WIN])
             self.assertEqual(staged[0]["licence"], "MIT")
             self.assertEqual(staged[0]["requires_python"], ">=3.9")
-            self.assertEqual(gap_wheels.trusted_staged(lines["staged"]), staged)
+            self.assertEqual(gap_wheels.trusted_staged((tmp / "staged" / "staged.json").read_text()), staged)
             self.assertEqual(json.loads(lines["tests"]), [{"target": "3.14 win-arm64", "runner": "windows-11-arm",
                                                            "python": "3.14", "slug": "3.14-win-arm64", "image": "",
                                                            "interpreter": "", "python_url": "",
@@ -787,7 +843,7 @@ class Stage(unittest.TestCase):
                  mock.patch.object(gap_wheels, "fetch_wheel", side_effect=lambda repo, rid: next(calls)):  # fmt: skip
                 gap_wheels.cmd_stage(args)
             lines = dict(line.split("=", 1) for line in out.read_text().splitlines())
-            self.assertEqual([w["wheel"] for w in json.loads(lines["staged"])], [GLIBC_T, MUSL])
+            self.assertEqual([w["wheel"] for w in json.loads((tmp / "staged" / "staged.json").read_text())], [GLIBC_T, MUSL])
             self.assertIn("needs libraries or symbol versions a manylinux_2_28_x86_64 system may not have: GLIBC_2.34",
                           (tmp / "summary.md").read_text())  # fmt: skip
             tests = {t["target"]: t for t in json.loads(lines["tests"])}
@@ -916,17 +972,21 @@ class KeepTheWheel(unittest.TestCase):
         seen = {}
 
         def fake_run_build(name, version, attempt, work, members, keep=None, plat=None, tag=None,
-                           platform_pattern=None):
+                           platform_pattern=None, lock=None, lock_sha256=None):
             seen["keep"] = keep
             return {"sdist": None, "sdist_sha256": None, "wheel": None, "sha256": None, "installs": None}
 
         with tempfile.TemporaryDirectory() as tmp:
             with (
                 mock.patch.object(gap_wheels, "run_build", fake_run_build),
+                mock.patch.object(gap_wheels.build_tool_lock, "load_lock", return_value=example_lock(
+                    {"name": "tiktoken", "version": "0.14.0", "target": "3.14 win-arm64"})),
                 mock.patch.object(gap_wheels.build_lab, "interpreter_problem", lambda target: None),
             ):
                 gap_wheels.main(["build", "--name", "tiktoken", "--version", "0.14.0", "--target", "3.14 win-arm64",
-                                 "--attempt", "2", "--runner", "windows-11-arm", "--out", str(Path(tmp) / "r.json"),
+                                 "--attempt", "2", "--runner", "windows-11-arm",
+                                 "--lock-bundle", "test-lock.json", "--lock-sha256", "e" * 64, "--pair-id", "0",
+                                 "--out", str(Path(tmp) / "r.json"),
                                  "--wheel-dir", str(Path(tmp) / "wheel")])  # fmt: skip
         self.assertEqual(seen["keep"], Path(tmp) / "wheel")
 
@@ -1388,11 +1448,14 @@ class Repair(unittest.TestCase):
     def test_the_repaired_wheel_with_pinned_tools_and_a_fixed_epoch(self):
         run, calls = self.fake_run()
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(gap_wheels.subprocess, "run", run):
-            got = gap_wheels.repair(Path(tmp) / "x-1.0-cp314-cp314-linux_x86_64.whl", Path(tmp))
+            py = Path(tmp) / "repair-venv" / "bin" / "python"
+            py.parent.mkdir(parents=True)
+            (py.parent / "auditwheel").touch()
+            got = gap_wheels.repair(Path(tmp) / "x-1.0-cp314-cp314-linux_x86_64.whl",
+                                    Path(tmp), locked_python=py)
             self.assertEqual(got.name, "x-1.0-cp314-cp314-manylinux_2_39_x86_64.whl")
-        install = next(c for c in calls if "install" in c)
-        self.assertTrue(all(t in install for t in gap_wheels.REPAIR_TOOLS))
-        self.assertTrue(all("==" in t for t in gap_wheels.REPAIR_TOOLS))  # pinned
+        self.assertFalse(any("install" in c for c in calls))
+        self.assertTrue(all("==" in t for t in gap_wheels.REPAIR_TOOLS))  # pinned by coordinator
 
     def test_no_wheel_or_two_wheels_or_a_failure_is_none(self):
         for exit_code, writes in ((1, ("x-1.0-cp314-cp314-manylinux_2_39_x86_64.whl",)), (0, ()),
@@ -1400,7 +1463,11 @@ class Repair(unittest.TestCase):
             with self.subTest(exit_code=exit_code, writes=writes):
                 run, _ = self.fake_run(exit_code, writes)
                 with tempfile.TemporaryDirectory() as tmp, mock.patch.object(gap_wheels.subprocess, "run", run):
-                    self.assertIsNone(gap_wheels.repair(Path(tmp) / "x.whl", Path(tmp)))
+                    py = Path(tmp) / "repair-venv" / "bin" / "python"
+                    py.parent.mkdir(parents=True)
+                    (py.parent / "auditwheel").touch()
+                    self.assertIsNone(gap_wheels.repair(Path(tmp) / "x.whl", Path(tmp),
+                                                        locked_python=py))
 
 
 
@@ -1417,7 +1484,11 @@ class RepairPlatform(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(gap_wheels.subprocess, "run", run):
-            got = gap_wheels.repair(Path(tmp) / "x.whl", Path(tmp), "manylinux_2_28_x86_64")
+            py = Path(tmp) / "repair-venv" / "bin" / "python"
+            py.parent.mkdir(parents=True)
+            (py.parent / "auditwheel").touch()
+            got = gap_wheels.repair(Path(tmp) / "x.whl", Path(tmp),
+                                    "manylinux_2_28_x86_64", locked_python=py)
             self.assertEqual(got.name, "x-1.0-cp314-cp314t-manylinux_2_28_x86_64.whl")
         repair = next(c for c in calls if "repair" in c)
         self.assertEqual(repair[repair.index("--plat") + 1], "manylinux_2_28_x86_64")

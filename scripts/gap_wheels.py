@@ -52,6 +52,7 @@ import hashlib
 import io
 import json
 import os
+import platform
 import posixpath
 import re
 import shutil
@@ -68,15 +69,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import build_lab  # TARGETS, interpreter_problem, the name and version rules
+import build_tool_lock
 
 SCHEMA = 1
 SDIST = re.compile(r"[A-Za-z0-9._-]{1,120}\.(?:tar\.gz|zip)", re.ASCII)
 WHEEL = re.compile(r"[A-Za-z0-9._+!-]{1,200}\.whl", re.ASCII)
 SHA256 = re.compile(r"[0-9a-f]{64}", re.ASCII)
 RESULT_KEYS = frozenset(
-    {"schema", "name", "version", "target", "attempt", "runner", "sdist", "sdist_sha256", "wheel", "sha256", "installs"}
+    {"schema", "name", "version", "target", "attempt", "runner", "sdist", "sdist_sha256", "wheel", "sha256", "installs", "tools"}
 )
-MAX_RESULT_BYTES = 10_000
+MAX_RESULT_BYTES = 64_000  # pair locks are bounded before dispatch by the coordinator
 BUILD_TIMEOUT = build_lab.BUILD_TIMEOUT
 INSTALL_TIMEOUT = build_lab.INSTALL_TIMEOUT
 
@@ -141,6 +143,18 @@ def cmd_plan(args: argparse.Namespace) -> int:
     # counted without resetting (an ISO week number jumps back to 1 each January).
     start = dt.date.today().toordinal() // 7 * args.max if args.rotate else 0
     jobs = plan(builds, args.max, only, start)
+    if args.lock_out:
+        report: list[tuple[str, str]] = []
+        planned = len(jobs) // 2
+        jobs, bundle = build_tool_lock.lock_plan(jobs, report)
+        Path(args.lock_out).write_text(json.dumps(bundle, sort_keys=True) + "\n", encoding="utf-8")
+        if getattr(args, "summary", None):
+            lines = [f"**{len(jobs) // 2} locked, {planned - len(jobs) // 2} skipped** of {planned} pairs",
+                     "", "| package / version / target | resolution |", "|---|---|"]
+            lines += [f"| {name.replace('|', '&#124;')} | {status.replace('|', '&#124;')} |"
+                      for name, status in report]
+            with open(args.summary, "a", encoding="utf-8") as stream:
+                stream.write("\n".join(lines) + "\n")
     hosted = [j for j in jobs if "image" not in j]
     docker = [j for j in jobs if "image" in j]
     print(f"{len(jobs) // 2} pairs, {len(jobs)} builds", file=sys.stderr)
@@ -208,7 +222,7 @@ def wheel_members(wheel: Path) -> dict[str, str]:
 
 # Pinned, and installed into a venv of their own (not the build's): auditwheel bundles a wheel's libraries and
 # patchelf rewrites their paths. SOURCE_DATE_EPOCH (build_env) fixes the repaired zip's timestamps.
-REPAIR_TOOLS = ("auditwheel==6.8.2", "patchelf==0.19.1.0")
+REPAIR_TOOLS = build_lab.REPAIR_TOOLS
 # The Windows counterpart: delvewheel bundles the DLLs a wheel's binaries import that a user's machine may not have
 # (the VC++ runtime's msvcp140.dll, vcomp140.dll) into <dist>.libs/, each under a name with its hash, rewrites the
 # imports to those names and adds the folder to the DLL search path in the package's __init__.py. A mangled name
@@ -300,20 +314,18 @@ def retag(wheel: Path, work: Path, tag: str) -> Path | None:
     return found
 
 
-def repair(wheel: Path, work: Path, plat: str | None = None) -> Path | None:
+def repair(wheel: Path, work: Path, plat: str | None = None, locked_python: Path | None = None) -> Path | None:
     """`auditwheel repair` of a Linux wheel into WORK/repaired: the one wheel it writes, or None (said why). With
     `plat`, to exactly that platform tag (auditwheel refuses if the wheel needs a newer glibc or musl)."""
-    tools = work / "repair-tools"
-    subprocess.run([sys.executable, "-m", "venv", str(tools)], check=True, timeout=INSTALL_TIMEOUT)
-    bin_dir = tools / "bin"
-    env = dict(build_env(), PATH=f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
-    i = subprocess.run([str(bin_dir / "python"), "-m", "pip", "install", "--no-cache-dir", "--only-binary", ":all:",
-                        *REPAIR_TOOLS], check=False, env=env, capture_output=True, text=True, errors="replace",
-                       timeout=INSTALL_TIMEOUT)  # fmt: skip
-    if i.returncode != 0:
-        print((i.stdout + i.stderr)[-3000:])
-        print("gap_wheels: couldn't install the repair tools", file=sys.stderr)
+    if locked_python is None:
+        print("gap_wheels: refusing auditwheel without the coordinator's repair lock", file=sys.stderr)
         return None
+    # A separate venv keeps repair dependencies outside untrusted build hooks.
+    bin_dir = locked_python.parent
+    if not (bin_dir / "auditwheel").is_file():
+        print("gap_wheels: locked auditwheel is missing", file=sys.stderr)
+        return None
+    env = dict(build_env(), PATH=f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     out = work / "repaired"
     try:
         plat_args = ["--plat", plat, "--only-plat"] if plat else []  # exactly that tag, no wider (older) one
@@ -333,7 +345,8 @@ def repair(wheel: Path, work: Path, plat: str | None = None) -> Path | None:
 
 
 def finish_wheel(
-    wheel: Path, work: Path, plat: str | None, tag: str | None, platform_pattern: str | None = None
+    wheel: Path, work: Path, plat: str | None, tag: str | None, platform_pattern: str | None = None,
+    locked_python: Path | None = None,
 ) -> Path | None:
     """The built wheel as it will be compared and published, or None (said why): on Linux repaired to `plat`
     (auditwheel); a py3-none-<platform> wheel retagged to `tag`, its target's one publishable tag, but only if every
@@ -349,7 +362,7 @@ def finish_wheel(
         # Logged for the reproducibility spike (#124): a pair that differs after repair but matched before points
         # at auditwheel or patchelf, not the compiler.
         print(f"gap_wheels: before repair: {wheels[0].name} sha256 {sha256(wheels[0])}")
-        repaired = repair(wheels[0], work, plat)
+        repaired = repair(wheels[0], work, plat, locked_python=locked_python)
         if repaired is None:
             print("gap_wheels: repair failed (the wheel built; auditwheel couldn't repair it)", file=sys.stderr)
             return None
@@ -396,6 +409,148 @@ def namespace_folders(wheel: Path) -> list[str]:
     return sorted(t for t in tops if f"{t}/__init__.py" not in names)
 
 
+
+def _tool_version(cmd: list[str], *, include_path: bool = True) -> str:
+    """Record the tool version; omit the ephemeral venv path for hash-locked tools."""
+    try:
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True, errors="replace", timeout=20)
+        version = " ".join((result.stdout + "\n" + result.stderr).split())
+        if not include_path:
+            return version[:450]
+        command = str(Path(cmd[0]).resolve()) if Path(cmd[0]).is_file() else (shutil.which(cmd[0]) or cmd[0])
+        return (command + ": " + version)[:450]
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _msvc_tools(target: str) -> tuple[str, str]:
+    """Activate one chosen MSVC installation before backend hooks can run.
+
+    PATH alone is insufficient: setuptools may call vcvarsall and Rust cc-rs
+    may discover cl.exe through vswhere. Import the selected vcvarsall
+    environment and tell setuptools and Cargo to use its exact tools.
+    """
+    arch = "arm64" if "win-arm64" in target else "x64"
+    host = "Hostarm64" if platform.machine().lower() in ("arm64", "aarch64") else "Hostx64"
+    roots = [Path(v) for k in ("ProgramFiles", "ProgramFiles(x86)", "VSINSTALLDIR")
+             if (v := os.environ.get(k))]
+    candidates: list[Path] = []
+    for root in roots:
+        candidates.extend(root.glob("Microsoft Visual Studio/*/*/VC/Tools/MSVC/*/bin/Host*/" + arch + "/cl.exe"))
+        candidates.extend(root.glob("VC/Tools/MSVC/*/bin/Host*/" + arch + "/cl.exe"))
+    if not candidates:
+        return "", ""
+
+    def installed_version(path: Path) -> tuple[int, tuple[int, ...], bool]:
+        parts = path.parts
+        release = next(
+            (parts[i + 1] for i in range(len(parts) - 1) if parts[i] == "Microsoft Visual Studio"), ""
+        )
+        visual_studio = {"2022": 17, "2019": 16, "2017": 15}.get(release)
+        if visual_studio is None:
+            visual_studio = int(release) if release.isdigit() else 0
+        toolset = next(
+            (parts[i + 1] for i in range(len(parts) - 1) if parts[i] == "MSVC"), "0"
+        )
+        versions = tuple(int(x) for x in toolset.split(".") if x.isdigit())
+        return visual_studio, versions, host.lower() in str(path).lower()
+
+    # Resolve VS 18 ahead of VS 2022/17; prefer the actual host architecture.
+    compiler = max(set(candidates), key=installed_version)
+    linker = compiler.with_name("link.exe")
+    vcvars = next(
+        (parent / "Auxiliary" / "Build" / "vcvarsall.bat"
+         for parent in compiler.parents
+         if (parent / "Auxiliary" / "Build" / "vcvarsall.bat").is_file()),
+        None,
+    )
+    if not linker.is_file() or vcvars is None:
+        return "", ""
+
+    source_host = "arm64" if "hostarm64" in str(compiler).lower() else "x64"
+    tool_arch = arch if source_host == arch else f"{source_host}_{arch}"
+    with tempfile.TemporaryDirectory() as directory:
+        script = Path(directory) / "msvc-setup.cmd"
+        script.write_text(
+            f'@echo off\ncall "{vcvars}" {tool_arch} >nul\n'
+            'if errorlevel 1 exit /b 1\nset\n', encoding="utf-8"
+        )
+        try:
+            result = subprocess.run(
+                ["cmd.exe", "/d", "/c", str(script)], capture_output=True,
+                text=True, errors="replace", timeout=90, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return "", ""
+    if result.returncode:
+        return "", ""
+
+    active = {}
+    for line in result.stdout.splitlines():
+        if "=" in line and not line.startswith("="):
+            key, value = line.split("=", 1)
+            if key and "\0" not in key + value:
+                active[key] = value
+    if not active.get("VCINSTALLDIR") or not active.get("VCToolsInstallDir"):
+        return "", ""
+    # vcvarsall may default to a different toolset inside the same VS instance.
+    if Path(active["VCToolsInstallDir"]).resolve() != compiler.parents[3].resolve():
+        return "", ""
+    os.environ.update(active)
+    os.environ["DISTUTILS_USE_SDK"] = "1"
+    os.environ["MSSdk"] = "1"
+    os.environ["CC"] = str(compiler)
+    os.environ["CXX"] = str(compiler)
+    os.environ["CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER" if arch == "arm64"
+               else "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"] = str(linker)
+    os.environ["PATH"] = f"{compiler.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+    if Path(shutil.which("cl.exe") or "").resolve() != compiler.resolve():
+        return "", ""
+    if Path(shutil.which("link.exe") or "").resolve() != linker.resolve():
+        return "", ""
+    return _tool_version([str(compiler), "/Bv"]), _tool_version([str(linker), "/?"])
+
+
+def expected_repair_tools(target: str) -> list[dict[str, str]]:
+    """The separately hash-verified bundling and retagging tools on each platform."""
+    tools = WINDOWS_REPAIR_TOOLS + RETAG_TOOLS if "win-" in target else RETAG_TOOLS
+    # Linux auditwheel/patchelf and their dependencies are separately checked
+    # against the coordinator lock in repair_packages.
+    return [{"requirement": package, "sha256": TOOL_HASHES[package]}
+            for package in sorted(set(tools))]
+
+
+def build_tool_provenance(
+    lock_sha256: str, packages: list[dict], target: str, build_bin: Path | None = None
+) -> dict:
+    """Record tools before the sdist's build backend is executed."""
+    image = build_lab.TARGETS[target].get("image") or os.environ.get("ImageVersion", "")
+    if os.name == "nt":
+        # vcvarsall sets its own PATH. Put the hash-locked venv back first so
+        # the backend cannot use Visual Studio's bundled cmake or ninja.
+        cc, link = _msvc_tools(target)
+        if build_bin is not None:
+            os.environ["PATH"] = f"{build_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+    else:
+        cc = _tool_version(["cc", "--version"])
+        link = _tool_version(["ld", "--version"])
+    rustc = _tool_version(["rustc", "--version", "--verbose"])
+    # cmake's executable lives under a random build-venv path. Its wheel
+    # identity is already pinned by lock_sha256, so record just its version.
+    cmake = _tool_version(["cmake", "--version"], include_path=False)
+    return {
+        "lock_sha256": lock_sha256,
+        "packages": [{"name": w["name"], "version": w["version"], "sha256": w["sha256"],
+                      "filename": w["filename"]} for w in packages],
+        "repair_packages": [],
+        "repair_tools": expected_repair_tools(target),
+        "python": platform.python_version(),
+        "python_build": sys.version,
+        "runner_image": image,
+        "compiler": {"cc": cc, "link": link, "rustc": rustc, "cmake": cmake},
+    }
+
+
 def run_build(
     name: str,
     version: str,
@@ -406,23 +561,40 @@ def run_build(
     plat: str | None = None,
     tag: str | None = None,
     platform_pattern: str | None = None,
+    lock: dict | None = None,
+    lock_sha256: str | None = None,
 ) -> dict:
     """Download the sdist, build the wheel from a fixed folder, hash it, and (first attempt) install it from a local
     folder into a fresh venv with nothing compiled. On Linux the wheel is repaired to `plat` (auditwheel); on Windows
     the DLLs it needs that a user may lack are bundled (delvewheel); a py3-none-<platform> wheel is retagged to `tag`,
     the target's one publishable tag. All before hashing, so both builds are compared as published. Fields left None
     mean that step didn't happen."""
-    fields: dict = {"sdist": None, "sdist_sha256": None, "wheel": None, "sha256": None, "installs": None}
+    fields: dict = {"sdist": None, "sdist_sha256": None, "wheel": None, "sha256": None,
+                    "installs": None, "tools": None}
     env = dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_NO_INPUT="1")
-    sdists = work / "sdist"
-    pip = [sys.executable, "-m", "pip"]
-    subprocess.run([*pip, "download", "--no-deps", "--no-binary", name, "--no-cache-dir", "-d", str(sdists),
-                    f"{name}=={version}"], check=False, env=env, timeout=BUILD_TIMEOUT)  # fmt: skip
-    found = [p for p in sdists.glob("*") if SDIST.fullmatch(p.name)] if sdists.is_dir() else []
-    if len(found) != 1:
-        print(f"gap_wheels: expected one sdist, found {len(found)}", file=sys.stderr)
+    if lock is None or not build_tool_lock.validate(lock) or build_tool_lock.digest(lock) != lock_sha256:
+        print("gap_wheels: no trusted build-tool lock; refusing unpinned build", file=sys.stderr)
         return fields
-    fields.update(sdist=found[0].name, sdist_sha256=sha256(found[0]))
+    if (lock["name"], lock["version"]) != (build_lab.canonical(name), version):
+        print("gap_wheels: tool lock is for another package or version", file=sys.stderr)
+        return fields
+    sdists = work / "sdist"
+    sdists.mkdir(parents=True, exist_ok=True)
+    found = [sdists / lock["sdist"]]
+    try:
+        build_tool_lock.download_locked({"url": lock["sdist_url"], "sha256": lock["sdist_sha256"]}, found[0])
+        fields.update(sdist=found[0].name, sdist_sha256=sha256(found[0]))
+        py, packages = build_tool_lock.create_build_environment(lock, work)
+        # Build backends may invoke a locked Python-supplied cmake/ninja executable.
+        # This PATH is also used by the compiler version probes and build process.
+        os.environ["PATH"] = f"{py.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+        tools = build_tool_provenance(lock_sha256, packages, lock["target"], build_bin=py.parent)
+        if not tools["compiler"]["cc"] or not tools["compiler"]["link"] or not tools["runner_image"]:
+            raise build_tool_lock.LockError("compiler or runner image version cannot be identified")
+        fields["tools"] = tools
+    except (build_tool_lock.LockError, OSError, subprocess.SubprocessError) as exc:
+        print(f"gap_wheels: locked build setup failed: {exc}", file=sys.stderr)
+        return fields
     fixed = Path("C:/gw" if os.name == "nt" else "/tmp/gw")
     try:
         src = unpack(found[0], fixed)
@@ -431,18 +603,30 @@ def run_build(
         return fields
     out = work / "out"
     try:
-        p = subprocess.run([*pip, "wheel", "--no-deps", "--no-cache-dir", "-w", str(out), str(src)], check=False,
-                           env=build_env(), capture_output=True, text=True, errors="replace",
-                           timeout=BUILD_TIMEOUT)  # fmt: skip
+        p = subprocess.run([str(py), "-m", "pip", "wheel", "--no-build-isolation", "--no-index", "--no-deps",
+                            "--no-cache-dir", "-w", str(out), str(src)], check=False,
+                           env=dict(build_env(), PIP_NO_INDEX="1"), capture_output=True,
+                           text=True, errors="replace", timeout=BUILD_TIMEOUT)  # fmt: skip
         print((p.stdout + p.stderr)[-6000:])
     except subprocess.TimeoutExpired:
         print("gap_wheels: the build timed out", file=sys.stderr)
         return fields
     wheels = sorted(out.glob("*.whl")) if out.is_dir() else []
-    if len(wheels) != 1 or not WHEEL.fullmatch(wheels[0].name):
+    if p.returncode != 0 or len(wheels) != 1 or not WHEEL.fullmatch(wheels[0].name):
         print(f"gap_wheels: expected one wheel, found {len(wheels)}", file=sys.stderr)
         return fields
-    finished = finish_wheel(wheels[0], work, plat, tag, platform_pattern)
+    repair_py = None
+    if sys.platform == "linux":
+        try:
+            repair_environment = build_tool_lock.create_repair_environment(lock, work)
+            if repair_environment is None:
+                raise build_tool_lock.LockError("no coordinator-locked Linux repair tools")
+            repair_py, repair_packages = repair_environment
+            fields["tools"]["repair_packages"] = expected_packages({"wheels": repair_packages})
+        except (build_tool_lock.LockError, OSError, subprocess.SubprocessError) as exc:
+            print(f"gap_wheels: locked repair environment failed: {exc}", file=sys.stderr)
+            return fields
+    finished = finish_wheel(wheels[0], work, plat, tag, platform_pattern, locked_python=repair_py)
     if finished is None:
         return fields
     wheels = [finished]
@@ -486,8 +670,15 @@ def cmd_build(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         keep = Path(args.wheel_dir) if args.wheel_dir else None
         plat = build_lab.TARGETS[args.target].get("plat")
+        job = {"name": args.name, "version": args.version, "target": target}
+        try:
+            lock = build_tool_lock.load_lock(Path(args.lock_bundle), args.pair_id, args.lock_sha256, job)
+        except (ValueError, OSError, KeyError) as exc:
+            print(f"gap_wheels: refusing build without coordinator lock: {exc}", file=sys.stderr)
+            return 2
         fields = run_build(args.name, args.version, args.attempt, Path(tmp), members, keep, plat=plat,
-                           tag=PUBLISH_TAGS.get(target), platform_pattern=build_lab.TARGETS[target]["wheel"])
+                           tag=PUBLISH_TAGS.get(target), platform_pattern=build_lab.TARGETS[target]["wheel"],
+                           lock=lock, lock_sha256=args.lock_sha256)
     result = {"schema": SCHEMA, "name": args.name, "version": args.version, "target": target,
               "attempt": args.attempt, "runner": args.runner, **fields}  # fmt: skip
     Path(args.out).write_text(json.dumps(result) + "\n", encoding="utf-8")
@@ -521,6 +712,65 @@ def wheel_problem(wheel: object, job: dict) -> str | None:
     return None
 
 
+
+def tool_provenance_valid(value: object) -> bool:
+    """The provenance schema required for every new, publishable wheel."""
+    if not isinstance(value, dict) or set(value) != {
+        "lock_sha256", "packages", "repair_packages", "repair_tools",
+        "python", "python_build", "runner_image", "compiler"
+    }:
+        return False
+    if not (isinstance(value["lock_sha256"], str) and SHA256.fullmatch(value["lock_sha256"])
+            and isinstance(value["python"], str)
+            and re.fullmatch(r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?(?:\.dev\d+)?", value["python"])
+            and isinstance(value["python_build"], str) and re.fullmatch(r"[ -~]{1,500}", value["python_build"])
+            and isinstance(value["runner_image"], str) and re.fullmatch(r"[ -~]{1,500}", value["runner_image"])):
+        return False
+    compiler = value["compiler"]
+    if not isinstance(compiler, dict) or set(compiler) != {"cc", "link", "rustc", "cmake"}:
+        return False
+    if not all(isinstance(c, str) and re.fullmatch(r"[ -~]{0,500}", c) for c in compiler.values()):
+        return False
+    if not compiler["cc"] or not compiler["link"]:
+        return False
+    pkgs = value["packages"]
+    repair_pkgs = value["repair_packages"]
+    if not isinstance(pkgs, list) or not 0 < len(pkgs) <= 100:
+        return False
+    if not isinstance(repair_pkgs, list) or len(repair_pkgs) > 100:
+        return False
+    repair_tools = value["repair_tools"]
+    if not isinstance(repair_tools, list) or len(repair_tools) > 10:
+        return False
+    for item in repair_tools:
+        if (not isinstance(item, dict) or set(item) != {"requirement", "sha256"}
+                or not isinstance(item["requirement"], str)
+                or re.fullmatch(r"[A-Za-z0-9._-]+==[A-Za-z0-9._+-]+", item["requirement"]) is None
+                or not isinstance(item["sha256"], str) or SHA256.fullmatch(item["sha256"]) is None):
+            return False
+    # The build and repair virtual environments are independent. Packages
+    # such as pip and packaging legitimately occur in both locked groups;
+    # reject duplicates *within* either group, not across the groups.
+    for group in (pkgs, repair_pkgs):
+        names = set()
+        for p in group:
+            if not isinstance(p, dict) or set(p) != {"name", "version", "filename", "sha256"}:
+                return False
+            if not (isinstance(p["name"], str) and build_tool_lock.NAME.fullmatch(p["name"])
+                    and p["name"] not in names and isinstance(p["version"], str)
+                    and 0 < len(p["version"]) <= 100 and isinstance(p["filename"], str)
+                    and build_tool_lock.WHEEL.fullmatch(p["filename"])
+                    and isinstance(p["sha256"], str) and SHA256.fullmatch(p["sha256"])):
+                return False
+            names.add(p["name"])
+    return True
+
+
+def expected_packages(lock: dict) -> list[dict]:
+    return [{"name": w["name"], "version": w["version"], "sha256": w["sha256"],
+             "filename": w["filename"]} for w in lock["wheels"]]
+
+
 def problems(result: object, job: dict) -> list[str]:
     """What's wrong with an untrusted result for `job` (empty when it's exactly what `build` writes for that job)."""
     if not isinstance(result, dict):
@@ -548,6 +798,10 @@ def problems(result: object, job: dict) -> list[str]:
         out.append("installs")
     if job["attempt"] == 2 and result["installs"] is not None:
         out.append("only the first build installs")
+    if not tool_provenance_valid(result["tools"]):
+        out.append("build tools are missing or invalid")
+    elif job.get("lock_sha256") and result["tools"]["lock_sha256"] != job["lock_sha256"]:
+        out.append("build tools do not match the planned lock")
     return out
 
 
@@ -578,6 +832,7 @@ def verify(
     results: dict[tuple[str, int], object],
     published: Callable[[str, str], dict[str, str] | None],
     members: dict[tuple[str, int], object] | None = None,
+    locks: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """(verified wheels, every pair with its verdict) from the plan's jobs, the results by (id, attempt), and a lookup
     of PyPI's sdists for a release, {filename: sha256} or None if PyPI couldn't be asked. It's only asked about pairs
@@ -605,6 +860,26 @@ def verify(
             second["sdist_sha256"],
         ):
             verdict = "the two builds differ" + differing(members.get((pid, 1)), members.get((pid, 2)))
+        elif locks is not None and (
+            not isinstance(locks, dict)
+            or not build_tool_lock.validate(locks.get("pairs", {}).get(pid))
+            or build_tool_lock.digest(locks["pairs"][pid]) != job.get("lock_sha256")
+            or first["tools"]["packages"] != expected_packages(locks["pairs"][pid])
+            or second["tools"]["packages"] != expected_packages(locks["pairs"][pid])
+            or first["tools"]["repair_packages"]
+            != expected_packages({"wheels": locks["pairs"][pid]["repair_wheels"]})
+            or second["tools"]["repair_packages"]
+            != expected_packages({"wheels": locks["pairs"][pid]["repair_wheels"]})
+            or first["tools"]["repair_tools"] != expected_repair_tools(job["target"])
+            or second["tools"]["repair_tools"] != expected_repair_tools(job["target"])
+            or first["sdist"] != locks["pairs"][pid]["sdist"]
+            or second["sdist"] != locks["pairs"][pid]["sdist"]
+            or first["sdist_sha256"] != locks["pairs"][pid]["sdist_sha256"]
+            or second["sdist_sha256"] != locks["pairs"][pid]["sdist_sha256"]
+        ):
+            verdict = "the coordinator's build-tool lock does not match the builds"
+        elif first["tools"] != second["tools"]:
+            verdict = "the two builds used different toolchains"
         elif (sdists := published(job["name"], job["version"])) is None:
             verdict = "couldn't check the sdist against PyPI"
         elif sdists.get(first["sdist"]) != first["sdist_sha256"]:
@@ -614,7 +889,7 @@ def verify(
         else:
             verdict = "verified"
             verified.append({**row, "wheel": first["wheel"], "sha256": first["sha256"], "sdist": first["sdist"],
-                             "sdist_sha256": first["sdist_sha256"]})  # fmt: skip
+                             "sdist_sha256": first["sdist_sha256"], "tools": first["tools"]})  # fmt: skip
         report.append({**row, "verdict": verdict})
     return verified, report
 
@@ -659,7 +934,15 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 members[(job["id"], job["attempt"])] = json.loads(mpath.read_text(encoding="utf-8"))
             except Exception:  # noqa: BLE001,S110  (untrusted diagnostics, e.g. nesting deep enough for RecursionError)
                 pass
-    verified, report = verify(jobs, results, pypi_sdists, members)
+    if not args.locks:
+        raise SystemExit("gap_wheels: merge requires the coordinator's immutable build-tool locks")
+    lock_path = Path(args.locks)
+    if not lock_path.is_file() or lock_path.stat().st_size > 4_000_000:
+        raise SystemExit("gap_wheels: missing or oversized build-tool lock bundle")
+    locks = json.loads(lock_path.read_text(encoding="utf-8"))
+    if not isinstance(locks, dict) or set(locks) != {"schema", "pairs"} or locks["schema"] != 1:
+        raise SystemExit("gap_wheels: invalid coordinator lock bundle")
+    verified, report = verify(jobs, results, pypi_sdists, members, locks)
     runs_file = Path(args.results) / "runs.json"
     if runs_file.is_file():  # written by collect, which is trusted
         urls = json.loads(runs_file.read_text(encoding="utf-8"))
@@ -706,6 +989,12 @@ def gh(args: list[str]) -> bytes:
 def cmd_dispatch(args: argparse.Namespace) -> int:
     check_args(args)
     jobs = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    lock_path = Path(args.locks)
+    if not lock_path.is_file() or lock_path.stat().st_size > 4_000_000:
+        raise SystemExit("gap_wheels: no trusted coordinator locks for dispatch")
+    bundle = json.loads(lock_path.read_text(encoding="utf-8"))
+    if not isinstance(bundle, dict) or set(bundle) != {"schema", "pairs"} or bundle["schema"] != 1:
+        raise SystemExit("gap_wheels: invalid coordinator lock bundle")
     for n, job in enumerate(jobs):
         # At most --parallel of this batch's builds at once, so the batch doesn't hold every runner the account has.
         while sum(r.get("status") != "completed" for r in this_batch(retry(lambda: list_runs(args.repo, args.since)),
@@ -718,8 +1007,21 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         spec = build_lab.TARGETS[job["target"]]  # the plan's own values, checked again: they become a run's inputs
         if not (build_lab.NAME.fullmatch(job["name"]) and build_lab.VERSION.fullmatch(job["version"])):
             raise SystemExit(f"gap_wheels: not a plan job: {job!r}")
+        if not build_tool_lock.SHA.fullmatch(job.get("lock_sha256", "")):
+            raise SystemExit("gap_wheels: no trusted lock digest on planned build")
+        lock = bundle["pairs"].get(str(job["id"]))
+        if (not build_tool_lock.validate(lock) or build_tool_lock.digest(lock) != job["lock_sha256"]
+                or (lock["name"], lock["version"], lock["target"])
+                != (build_lab.canonical(job["name"]), job["version"], job["target"])):
+            raise SystemExit("gap_wheels: dispatch lock does not match the planned pair")
+        # Every build receives the same one-pair lock as an input. Do not grant
+        # untrusted builds permissions to download coordinator artifacts.
+        lock_json = json.dumps({"schema": 1, "pairs": {"0": lock}}, separators=(",", ":"), sort_keys=True)
+        if len(lock_json.encode("utf-8")) > 30_000:
+            raise SystemExit("gap_wheels: pair lock exceeds the dispatch input limit")
         fields = {"batch": args.batch, "name": job["name"], "version": job["version"], "target": job["target"],
                   "attempt": str(job["attempt"]), "runner": spec["runner"],
+                  "lock_sha256": job["lock_sha256"], "lock_json": lock_json,
                   # In an image the build runs that image's interpreter for the target, not setup-python's.
                   "python": spec.get("interpreter", spec["python"]) if "image" in spec else spec["python"],
                   "image": spec.get("image", "")}  # fmt: skip
@@ -1640,14 +1942,22 @@ def take_wheel(repo: str, wheel: dict) -> tuple[bytes | None, str | None]:
 
 
 def cmd_stage(args: argparse.Namespace) -> int:
-    """Write STAGED/<wheel> and STAGED/staged.json for the verified wheels that may be published, and (for the
-    workflow) `staged`, the same list, and `tests`, the targets to install-test, as GitHub outputs."""
+    """Stage verified wheels and write STAGED/staged.json with complete provenance.
+
+    GitHub outputs contain only the staged-file SHA-256, staged count and test matrix,
+    not the potentially large wheel/provenance records.
+    """
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     out = Path(args.staged)
     out.mkdir(parents=True, exist_ok=True)
     optout = opted_out(Path(args.optout))
     staged, lines = [], []
     for wheel in manifest["wheels"]:
+        if not tool_provenance_valid(wheel.get("tools")):
+            lines.append(
+                f"| {wheel['name']} | {wheel['version']} | {wheel['target']} | no verified toolchain |"
+            )
+            continue
         info = pypi_info(wheel["name"], wheel["version"])
         reason = stage_reason(wheel, info, optout)
         data = None
@@ -1664,10 +1974,12 @@ def cmd_stage(args: argparse.Namespace) -> int:
             continue
         (out / wheel["wheel"]).write_bytes(data)
         staged.append({**{k: wheel[k] for k in ("name", "version", "target", "wheel", "sha256", "sdist",
-                                                "sdist_sha256", "builds")},
+                                                "sdist_sha256", "builds", "tools")},
                        "licence": stated, "requires_python": info.get("requires_python") or None,
                        "verified": manifest.get("date"), "batch": manifest.get("run")})  # fmt: skip
-    (out / "staged.json").write_text(json.dumps(staged, indent=1) + "\n", encoding="utf-8")
+    staged_file = out / "staged.json"
+    staged_file.write_text(json.dumps(staged, indent=1) + "\n", encoding="utf-8")
+    staged_sha256 = sha256(staged_file)
     matrix = [install_test_job(t) for t in sorted({w["target"] for w in staged})]
     text = "\n".join([f"**{len(staged)} staged** of {len(manifest['wheels'])} verified", "",
                       "| package | version | target | |", "|---|---|---|---|", *lines]) + "\n"  # fmt: skip
@@ -1677,8 +1989,10 @@ def cmd_stage(args: argparse.Namespace) -> int:
             f.write(text)
     if args.github_output:
         with open(args.github_output, "a", encoding="utf-8") as f:
-            # The publish job trusts only this output for what to publish; the artifact is just the bytes.
-            f.write(f"staged={json.dumps(staged, separators=(',', ':'))}\n")
+            # Only a digest and count cross the job-output boundary. The full
+            # provenance stays in staged.json and is checked against this digest.
+            f.write(f"staged_sha256={staged_sha256}\n")
+            f.write(f"staged_count={len(staged)}\n")
             f.write(f"tests={json.dumps(matrix, separators=(',', ':'))}\n")
     return 0
 
@@ -1835,7 +2149,9 @@ def select(staged: list[dict], tested: dict[str, dict[str, bool]], folder: Path,
     for w in staged:
         name = w["wheel"]
         path = folder / name
-        if not path.is_file() or path.is_symlink() or sha256(path) != w["sha256"]:
+        if not tool_provenance_valid(w.get("tools")):
+            lines.append(f"{name}: no verified build-tool provenance; not published")
+        elif not path.is_file() or path.is_symlink() or sha256(path) != w["sha256"]:
             lines.append(f"{name}: the staged file isn't the verified one; not published")
         elif not tested.get(w["target"], {}).get(name):
             lines.append(f"{name}: didn't pass the install test on a fresh runner; not published")
@@ -1848,15 +2164,18 @@ def select(staged: list[dict], tested: dict[str, dict[str, bool]], folder: Path,
     return new, lines
 
 
+MAX_STAGED_BYTES = 10_000_000
+
+
 def trusted_staged(text: str) -> list[dict]:
     """The staging job's `staged` output, checked for shape (it's ours, but a bad one must stop, not half-publish)."""
     staged = json.loads(text)
     keys = {"name", "version", "target", "wheel", "sha256", "sdist", "sdist_sha256", "builds", "licence",
-            "requires_python", "verified", "batch"}  # fmt: skip
+            "requires_python", "verified", "batch", "tools"}  # fmt: skip
     if not isinstance(staged, list) or not all(
         isinstance(w, dict) and set(w) == keys and isinstance(w["wheel"], str) and ASSET.fullmatch(w["wheel"])
         and isinstance(w["sha256"], str) and SHA256.fullmatch(w["sha256"]) and w["target"] in build_lab.TARGETS
-        and tag_ok(w["wheel"], w["target"])
+        and tag_ok(w["wheel"], w["target"]) and tool_provenance_valid(w["tools"])
         for w in staged
     ):
         raise SystemExit("gap_wheels: --staged-json isn't what stage writes")
@@ -1866,7 +2185,17 @@ def trusted_staged(text: str) -> list[dict]:
 def cmd_publish(args: argparse.Namespace) -> int:
     """Copy the wheels to publish into RELEASE_DIR and add them to the index file; list in RELEASE_DIR/withdraw.txt
     the published wheels of projects that have since opted out (removed from the index here)."""
-    staged = trusted_staged(args.staged_json)
+    if getattr(args, "staged_file", None):
+        path = Path(args.staged_file)
+        if (not args.staged_sha256 or not SHA256.fullmatch(args.staged_sha256)
+                or not path.is_file() or path.is_symlink()
+                or path.stat().st_size > MAX_STAGED_BYTES
+                or sha256(path) != args.staged_sha256):
+            raise SystemExit("gap_wheels: staged file is missing, modified or not digest-verified")
+        staged_text = path.read_text(encoding="utf-8")
+    else:
+        staged_text = args.staged_json
+    staged = trusted_staged(staged_text)
     staged_dir = Path(args.files)
     index_path = Path(args.index)
     index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.is_file() else {"schema": INDEX_SCHEMA, "wheels": []}
@@ -1902,21 +2231,26 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--only")
     p.add_argument("--rotate", action="store_true", help="start further on each week (for the scheduled batch)")
     p.add_argument("--github-output")
+    p.add_argument("--lock-out", help="coordinator-only build-tool lock bundle; skip unpinned pairs")
+    p.add_argument("--summary", help="append locked and skipped pairs to the GitHub step summary")
     p.set_defaults(func=cmd_plan)
     b = sub.add_parser("build")
     for flag in ("--name", "--version", "--target", "--runner", "--out"):
         b.add_argument(flag, required=True)
     b.add_argument("--attempt", type=int, required=True)
     b.add_argument("--wheel-dir", help="copy the built wheel here (the build run uploads it as `wheel`)")
+    for flag in ("--lock-bundle", "--lock-sha256", "--pair-id"):
+        b.add_argument(flag, required=True)
     b.set_defaults(func=cmd_build)
     m = sub.add_parser("merge")
     m.add_argument("results")
     m.add_argument("--plan", required=True)
+    m.add_argument("--locks", required=True, help="trusted build-tool locks created before dispatch")
     m.add_argument("--out", required=True)
     m.add_argument("--summary")
     m.set_defaults(func=cmd_merge)
     d = sub.add_parser("dispatch")
-    for flag in ("--plan", "--batch", "--repo", "--sha", "--since"):
+    for flag in ("--plan", "--batch", "--repo", "--sha", "--since", "--locks"):
         d.add_argument(flag, required=True)
     d.add_argument("--parallel", type=int, default=20, help="most of this batch's builds running at once")
     d.set_defaults(func=cmd_dispatch)
@@ -1937,8 +2271,12 @@ def main(argv: list[str] | None = None) -> int:
         t.add_argument(flag, required=True)
     t.set_defaults(func=cmd_install_test)
     pb = sub.add_parser("publish")
-    for flag in ("--staged-json", "--files", "--tested", "--index", "--release-dir"):
+    for flag in ("--files", "--tested", "--index", "--release-dir"):
         pb.add_argument(flag, required=True)
+    stage_input = pb.add_mutually_exclusive_group(required=True)
+    stage_input.add_argument("--staged-json")
+    stage_input.add_argument("--staged-file")
+    pb.add_argument("--staged-sha256", help="SHA-256 of the trusted stage job's staged.json output")
     pb.add_argument("--optout", default="data/gap-wheels-optout.txt")
     pb.add_argument("--run", default="")
     pb.add_argument("--summary")

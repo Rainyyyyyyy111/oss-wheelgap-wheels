@@ -54,16 +54,22 @@ lots of outside contributions. Changes here are made by the maintainers, and eve
    (`data/builds.json` there). The weekly batch (`.github/workflows/gap-wheels.yml`) plans pairs from that list: a
    build with a compiled extension module, or one whose wheel carries native code without one (tagged
    `py3-none-<platform>`, such as LightGBM's DLL, which it loads with `ctypes`).
-2. **Build twice:** each pair is built in two separate workflow runs (`gap-wheel-build.yml`), from the sdist PyPI
-   publishes (its sha256 is checked against PyPI's), unpacked to a fixed path with a fixed `SOURCE_DATE_EPOCH`. On
+2. **Build twice:** before dispatch, the trusted coordinator reads the verified PyPI sdist's static
+   `pyproject.toml` requirements without running package code and resolves wheels-only build dependencies, including
+   an exact pip version. It records their names, versions, source URLs and SHA-256 hashes once per pair. Both builds
+   install only those checked wheels into isolated environments and run with `--no-build-isolation --no-index`.
+   Unsupported or unresolvable build requirements cause the pair to be skipped. Each pair is then built in two
+   separate workflow runs (`gap-wheel-build.yml`), from the sdist PyPI publishes (its sha256 is checked against
+   PyPI's), unpacked to a fixed path with a fixed `SOURCE_DATE_EPOCH`. On
    Linux the wheel is repaired with a pinned `auditwheel` first. On Windows, if its binaries import VC++ runtime DLLs
    a user's machine may lack (`msvcp140.dll`, `vcomp140.dll`…), a pinned `delvewheel` bundles those, and only those
    (by name), into `<dist>.libs/` under names carrying their hash. A `py3-none-<platform>` wheel whose own tag is the
    target's platform is first retagged with a pinned `wheel` to the target's one exact tag, so it installs only on the
    Python it was built and tested on. All of this happens before hashing, in both builds, and both tools are pinned by
    version and sha256.
-3. **Verify:** a trusted job compares the two results. A pair counts only if both wheels are byte-identical and pip
-   installs the wheel without compiling anything.
+3. **Verify:** a trusted job compares the two results, the coordinator's immutable build-tool lock and the recorded
+   Python patch version, compiler/linker versions and runner image. A pair counts only when the toolchains match,
+   both wheels are byte-identical and pip installs the wheel without compiling anything.
 4. **Stage:** the trusted job takes the wheel file from a build run only if its sha256 is the verified one, and only
    for the one exact tag the target allows, in its filename and in its own `.dist-info/WHEEL` file, and on Windows only
    if every binary's PE header is for the target's CPU. The wheel can't need a DLL a user's machine may lack (on Windows, read
@@ -160,8 +166,10 @@ whether its source is safe.
 - **A build that substitutes another package's files, or forges another build's result.** Each build runs in its
   own workflow run, so its artifact token can only write its own artifacts. The coordinator takes results only from
   the run with that build's exact title, started from `main` at its own commit, and refuses duplicates.
-- **A build whose output differs from what the sdist gives.** Something changed in one run, or the build isn't
-  reproducible: two builds must match byte for byte, or nothing is published.
+- **A build whose output or toolchain differs between independent runs.** The coordinator resolves a single
+  hash-verified lock for the PEP 517 build backend, all resolved dependencies and pip. Both builds must use
+  that lock. If the Python patch version, compiler/linker versions or recorded runner image differ, the pair is
+  rejected even when its wheel bytes match. Missing provenance also prevents publication.
 - **A build that tampers with what gets published.** The publish job never runs package code. It trusts only the
   staging job's own output for names and hashes, and re-hashes every file it uploads.
 - **Wrong-platform installs.** A wheel carries exactly one tag, the Python and platform it was built and tested on.
@@ -178,12 +186,16 @@ whether its source is safe.
 
 - **A malicious sdist.** A wheel built from it is as malicious as the sdist. Installing the package from PyPI the
   normal way runs the same code. These wheels are only as trustworthy as the sdist PyPI serves.
-- **A compromise of a build toolchain.** Linux builds run in a pinned image (`quay.io/pypa/manylinux_2_28` or
-  `python:3.14-alpine`, by digest) with a pinned Rust (rustup-init checked by sha256, then Rust's own channel
-  manifest over TLS). The wheel tools that change a built wheel (auditwheel and patchelf on Linux; delvewheel and
-  `wheel` for bundling and retagging, pinned by version and sha256) are part of it too, and so are the VC++ runtime
-  DLLs delvewheel bundles from the runner image. Build backends (setuptools, Cython…) aren't pinned yet (#4). Both
-  builds of a pair use the same toolchain, so matching builds can't catch a bad one.
+- **A compromise of a build toolchain.** Build backends and their resolved dependencies are now pinned by wheel
+  SHA-256 in a coordinator-generated lock, as is the build environment's pip version. Linux builds use a digest-pinned
+  image and a version-pinned Rust toolchain (rustup-init itself is SHA-256 checked); auditwheel, patchelf
+  and their Python dependencies are included in the coordinator's SHA-256-pinned wheel lock.
+  Windows builds use SHA-256-pinned wheel bundling and retagging tools, but the GitHub-hosted runner image and the
+  exact installed MSVC/CPython patch versions still float. The pipeline records those versions and refuses to compare
+  results made with different ones. Matching builds under the same tools **cannot** detect a malicious sdist, a
+  compromised upstream tool, or an attack that gives the same compromised inputs to both builds.
+  The Windows runner image is not pinned to an immutable digest: an image refresh may cause a pair to be rejected,
+  which is safer than silently treating the runs as equivalent.
 - **A compromise of GitHub Actions or of a runner image.** Both builds of a pair run on the same runner image, so
   matching builds show that the build is deterministic there, not that two independent parties built it.
 - **A stale PyPI list.** The index is rebuilt hourly, so for the packages here a release uploaded in the last hour

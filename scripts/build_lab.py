@@ -44,6 +44,9 @@ import time
 import zipfile
 from pathlib import Path
 
+# Wheel publishing repair tools are pinned once for the coordinator and builders.
+REPAIR_TOOLS = ("auditwheel==6.8.2", "patchelf==0.19.1.0")
+
 SCHEMA = 1
 # Each lab target: the tracker's target label, the GitHub runner it builds on, the Python it builds for, the
 # interpreter platform (sysconfig.get_platform()) that must be running it, and the wheel platform tags that count as

@@ -37,7 +37,7 @@ jobs:
     # Only from main: the build runs are started from main, and collect checks they ran this commit.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 35 # bounded worker pool and per-pair timeouts
     outputs:
       all: ${{ steps.plan.outputs.all }}
       since: ${{ steps.plan.outputs.since }}
@@ -46,6 +46,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+          # x86_64-unknown-linux-gnu uv 0.13.9 release archive SHA-256.
+          checksum: "a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5"
+          enable-cache: false
       - id: plan
         env:
           # A weekly batch takes 60 pairs (120 builds, a few hours at 20 at a time), starting further on each week
@@ -61,7 +67,14 @@ jobs:
           # The batch is fixed here, so re-running only a later job still finds this batch's build runs.
           echo "batch=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           echo "since=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-          python3 scripts/gap_wheels.py plan "$RUNNER_TEMP/builds.json" --max "$MAX" $rotate ${ONLY:+--only "$ONLY"} --github-output "$GITHUB_OUTPUT"
+          python3 scripts/gap_wheels.py plan "$RUNNER_TEMP/builds.json" --max "$MAX" $rotate ${ONLY:+--only "$ONLY"} --lock-out "$RUNNER_TEMP/build-tool-locks.json" --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Store the coordinator's immutable build-tool locks
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-tool-locks
+          path: ${{ runner.temp }}/build-tool-locks.json
+          retention-days: 7
 
   dispatch:
     needs: plan
@@ -75,6 +88,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Download the trusted coordinator locks
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-tool-locks
+          path: ${{ runner.temp }}
       - name: Start one build run per build
         env:
           GH_TOKEN: ${{ github.token }}
@@ -85,7 +103,7 @@ jobs:
         run: |
           printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
           python3 scripts/gap_wheels.py dispatch --plan "$RUNNER_TEMP/plan.json" --batch "$BATCH" --repo "$GITHUB_REPOSITORY" \
-            --sha "$GITHUB_SHA" --since "$SINCE"
+            --sha "$GITHUB_SHA" --since "$SINCE" --locks "$RUNNER_TEMP/build-tool-locks.json"
 
   collect:
     needs: [plan, dispatch]
@@ -97,7 +115,8 @@ jobs:
       actions: read
       contents: read
     outputs:
-      staged: ${{ steps.stage.outputs.staged }}
+      staged_count: ${{ steps.stage.outputs.staged_count }}
+      staged_sha256: ${{ steps.stage.outputs.staged_sha256 }}
       tests: ${{ steps.stage.outputs.tests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -113,10 +132,15 @@ jobs:
           printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
           python3 scripts/gap_wheels.py collect --plan "$RUNNER_TEMP/plan.json" --batch "$BATCH" \
             --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA" --since "$SINCE" --results results --wait 270
+      - name: Restore the coordinator's build-tool locks
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-tool-locks
+          path: ${{ runner.temp }}
       - name: Verify the pairs and write the manifest
         env:
           PLAN: ${{ needs.plan.outputs.all }}
-        run: python3 scripts/gap_wheels.py merge results --plan "$RUNNER_TEMP/plan.json" --out manifest.json --summary "$GITHUB_STEP_SUMMARY"
+        run: python3 scripts/gap_wheels.py merge results --plan "$RUNNER_TEMP/plan.json" --locks "$RUNNER_TEMP/build-tool-locks.json" --out manifest.json --summary "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: manifest
@@ -214,7 +238,7 @@ jobs:
   publish:
     # Never runs package code: it hashes files, attests them, uploads them and commits the index.
     needs: [collect, install-test]
-    if: ${{ !cancelled() && needs.collect.result == 'success' && needs.collect.outputs.staged != '' && needs.collect.outputs.staged != '[]' }}
+    if: ${{ !cancelled() && needs.collect.result == 'success' && needs.collect.outputs.staged_count != '' && needs.collect.outputs.staged_count != '0' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # A maintainer approves each publish: the environment's required reviewers (repo settings) gate this job.
@@ -243,10 +267,10 @@ jobs:
       - id: choose
         name: Choose the wheels to publish and update the index
         env:
-          STAGED: ${{ needs.collect.outputs.staged }}
+          STAGED_SHA256: ${{ needs.collect.outputs.staged_sha256 }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          python3 scripts/gap_wheels.py publish --staged-json "$STAGED" --files staged --tested tested \
+          python3 scripts/gap_wheels.py publish --staged-file staged/staged.json --staged-sha256 "$STAGED_SHA256" --files staged --tested tested \
             --index data/gap-wheels.json --release-dir release --run "$RUN" --summary "$GITHUB_STEP_SUMMARY"
           echo "count=$(find release -maxdepth 1 -name '*.whl' | wc -l)" >> "$GITHUB_OUTPUT"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

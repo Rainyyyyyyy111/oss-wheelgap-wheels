@@ -30,4 +30,5 @@ PATH="$HOME/.cargo/bin:$PATH"
 export PATH
 
 exec "$INTERPRETER" scripts/gap_wheels.py build --name "$NAME" --version "$VERSION" --target "$TARGET" \
-  --attempt "$ATTEMPT" --runner "$RUNNER" --out /out/result.json --wheel-dir /out/wheel
+  --attempt "$ATTEMPT" --runner "$RUNNER" --out /out/result.json --wheel-dir /out/wheel \
+  --lock-bundle /locks/build-tool-locks.json --pair-id 0 --lock-sha256 "$LOCK_SHA256"
