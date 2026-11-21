@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from xml.etree import ElementTree
 
 from scripts import build_gap_index
 
@@ -310,7 +311,7 @@ class Index(unittest.TestCase):
         page = (self.build([with_recipe, wheel()]) / "index.html").read_text()
         self.assertEqual(page.count("<small>bundles libyaml 0.2.5 (MIT)</small>"), 1)
         row = next(line for line in page.splitlines() if 'id="pyyaml"' in line)
-        self.assertIn(f'<small title="{SHA}">{SHA[:12]}</small><br><small>bundles libyaml 0.2.5 (MIT)</small></td>', row)
+        self.assertIn(f'<small title="{SHA}">{SHA[:12]}</small><br><small>bundles libyaml 0.2.5 (MIT)</small><br><a href=', row)
         self.assertNotIn("bundles", next(line for line in page.splitlines() if 'id="tiktoken"' in line))
         self.assertEqual(build_gap_index.bundled(wheel()), "")
         two = [libyaml, {**libyaml, "library": "zlib-ng", "version": "2.2.4", "licence": "Zlib"}]
@@ -373,6 +374,53 @@ class Index(unittest.TestCase):
         self.assertIn("withdrawn: PyPI has its own now", row)
         self.assertIn("<td></td>", row)
         self.assertNotIn("pip install", row)
+
+    def test_the_page_says_the_wheels_are_unofficial_and_where_to_report(self):
+        page = (self.build([wheel()]) / "index.html").read_text(encoding="utf-8")
+        intro = page.split("</header>", 1)[1].split("<section>", 1)[0]
+        self.assertIn("These wheels are unofficial.", intro)
+        self.assertIn("The package's maintainers didn't build them and haven't reviewed them.", intro)
+        self.assertIn("a wheelgap maintainer approves a publish run", page)
+        self.assertNotIn("after a maintainer approves", page)
+        section = page.split('<h2 id="report_a_problem">Problems with a wheel</h2>', 1)[1].split("</section>", 1)[0]
+        self.assertIn('<a href="https://github.com/wheelgap/wheels/issues/new?template=broken-wheel.yml">', section)
+        self.assertIn('<a href="https://github.com/wheelgap/wheels/security/advisories/new">', section)
+        self.assertIn("taken down first and investigated after", section)
+        self.assertIn('href="#report_a_problem"', intro)
+        self.assertEqual(page.count('id="report_a_problem"'), 1)
+        self.assertIn("Content-Security-Policy", page)
+        self.assertNotIn("<script", page)
+
+    def test_each_row_in_the_index_links_the_report_form_with_its_file_name(self):
+        lz4 = "lz4-4.4.5-cp314-cp314-win_arm64.whl"
+        page = (self.build([wheel(), wheel(name="lz4", file=lz4, version="4.4.5")]) / "index.html").read_text()
+        for project, file in (("tiktoken", wheel()["wheel"]), ("lz4", lz4)):
+            with self.subTest(project):
+                row = page.split(f'<tr id="{project}">', 1)[1].split("</tr>", 1)[0]
+                self.assertIn(
+                    '<br><a href="https://github.com/wheelgap/wheels/issues/new?template=broken-wheel.yml'
+                    f'&amp;wheel={file}&amp;title=Broken%20wheel%3A%20{file}" '
+                    f'aria-label="report a problem with {file}">report</a></td>',
+                    row,
+                )
+                self.assertEqual(row.count(">report</a>"), 1)
+                self.assertNotIn("&wheel=", row)
+        labels = re.findall(r'aria-label="(report a problem with [^"]+)"', page)
+        self.assertEqual(len(labels), len(set(labels)), labels)
+        # Everything but letters, digits and "_.-~" is percent-encoded, so a file name can't add a query parameter.
+        self.assertEqual(
+            build_gap_index.report_url("a&b=c d+e-1.0.whl"),
+            "https://github.com/wheelgap/wheels/issues/new?template=broken-wheel.yml"
+            "&wheel=a%26b%3Dc%20d%2Be-1.0.whl&title=Broken%20wheel%3A%20a%26b%3Dc%20d%2Be-1.0.whl",
+        )
+
+    def test_withdrawn_wheel_has_no_report_link(self):
+        filename = "tiktoken-0.14.0-cp314-cp314-win_arm64.whl"
+        page = (self.build([wheel()], {"tiktoken": [pypi_file(filename)]}) / "index.html").read_text()
+        row = page.split('<tr id="tiktoken">', 1)[1].split("</tr>", 1)[0]
+        self.assertIn("withdrawn: PyPI has its own now", row)
+        self.assertNotIn("report", row)
+        self.assertNotIn("issues/new", row)
 
     def test_install_command_ignores_untrusted_version_field(self):
         page = (self.build([wheel(version="1.0; rm -rf ~")]) / "index.html").read_text()
@@ -565,6 +613,38 @@ class Index(unittest.TestCase):
         self.assertIn("explicit = true", page)
         self.assertIn('tokenizers = { index = "wheelgap" }', page)
 
+    # Mirrors what `wheelgap --fix` prints next to its link to this page: PIP_CAVEAT, LOCK_CAVEAT, UV_MERGE and
+    # text_lines() in wheelgap's src/wheelgap/gapwheels.py (wheelgap/wheelgap). This repo doesn't depend on wheelgap,
+    # so the phrases are copied here: change one side and the other needs the same change. The README's opening
+    # section says the same four things.
+    def test_the_page_says_what_wheelgap_fix_says(self):
+        page = (self.build([wheel()]) / "index.html").read_text(encoding="utf-8")
+        how = page.split("<h2>How to use it</h2>", 1)[1].split("</section>", 1)[0]
+        text = html.unescape(re.sub(r"<[^>]+>", "", how))
+        index = "https://wheelgap.github.io/wheels/simple/"
+        # 1. A private index (PIP_CAVEAT).
+        self.assertIn("pip treats every index alike, so do this only if the packages below come from PyPI: not if a "
+                      "private index (set in pip.conf, say) has packages of the same names.", text)
+        # 2. Hash-pinned requirements: the line's form, and where the full sha256 is.
+        self.assertIn("If your requirements file pins hashes (--require-hashes), also add each wheel's hash to its "
+                      "line", text)
+        self.assertIn("NAME==VERSION --hash=sha256:", text)
+        self.assertRegex(how, r'<a href="data/status\.json">status\.json</a>, as the <code>sha256</code> of the row '
+                              r"whose <code>wheel</code> is the file name")
+        # 3. uv's next steps (text_lines' "then run uv lock", and UV_MERGE).
+        after_config = text.split('tokenizers = { index = "wheelgap" }', 1)[1]
+        self.assertTrue(after_config.lstrip().startswith("Then run uv lock."), after_config[:80])
+        self.assertIn("If pyproject.toml already has a [tool.uv.sources] table, add the package's line to it instead "
+                      "of a second one.", text)
+        # 4. Other lockfiles (text_lines' sentence, and LOCK_CAVEAT).
+        self.assertIn(f"pin each file, so add {index} as an index (for these packages only, if the tool allows it) "
+                      "where that lockfile is made, then lock again.", text)
+        self.assertIn("An index that isn't limited to these packages has the same risk as with pip: don't add it if "
+                      "a private index has packages of the same names.", text)
+        # The commands themselves are as they were, and --fix isn't said to be in a release.
+        self.assertIn(f"<pre><code>pip install --extra-index-url {index} PACKAGE</code></pre>", how)
+        self.assertIn("not in a release yet", text)
+
     def test_our_wheel_follows_pypi_yanking_its_release(self):
         sdist = pypi_file("tiktoken-0.14.0.tar.gz", yanked="security issue")
         both = [sdist, pypi_file("tiktoken-0.14.0-cp314-cp314-win_amd64.whl", yanked="security issue")]
@@ -576,6 +656,29 @@ class Index(unittest.TestCase):
         other = [pypi_file("tiktoken-0.13.0.tar.gz", yanked=True)]  # another release's yank
         page = (self.build([wheel()], {"tiktoken": other}) / "simple/tiktoken/index.html").read_text()
         self.assertIn(f'#sha256={SHA}" data-requires-python="&gt;=3.9">tiktoken-0.14.0-cp314', page)
+
+    def test_the_page_shows_a_yanked_wheel_as_yanked_with_pypis_reason(self):
+        lz4 = wheel(name="lz4", file="lz4-4.4.5-cp314-cp314-win_arm64.whl", version="4.4.5")
+
+        def rows(reason):
+            site = self.build([wheel(), lz4], {"tiktoken": [pypi_file("tiktoken-0.14.0.tar.gz", yanked=reason)]})
+            page = (site / "index.html").read_text(encoding="utf-8")
+            return [page.split(f'<tr id="{p}">', 1)[1].split("</tr>", 1)[0] for p in ("tiktoken", "lz4")], page
+
+        (yanked, other), page = rows("broken release")
+        self.assertTrue(yanked.endswith("<td>in the index, but PyPI has yanked this release: broken release</td>"))
+        self.assertIn("tiktoken==0.14.0</code>", yanked)  # the == pin is how pip and uv still take a yanked file
+        self.assertIn(">report</a>", yanked)
+        self.assertTrue(other.endswith("<td>in the index</td>"), other)
+        self.assertIn(" 2 so far.", page)  # a yanked wheel is still in the index
+        (yanked, _), page = rows("<b>bad</b>")
+        self.assertTrue(yanked.endswith("yanked this release: &lt;b&gt;bad&lt;/b&gt;</td>"), yanked)
+        self.assertNotIn("<b>", page)
+        for no_reason in (True, ""):
+            with self.subTest(no_reason):
+                (yanked, other), _ = rows(no_reason)
+                self.assertTrue(yanked.endswith("<td>in the index, but PyPI has yanked this release</td>"), yanked)
+                self.assertTrue(other.endswith("<td>in the index</td>"), other)
 
     def test_our_wheel_leaves_when_pypi_no_longer_has_the_release(self):
         site = self.build([wheel()], {"tiktoken": [pypi_file("tiktoken-0.15.0.tar.gz")]}, sdists=False)
@@ -711,6 +814,158 @@ class Index(unittest.TestCase):
         self.assert_status_matches_index(site)
         rows = json.loads((site / "data/status.json").read_text())["wheels"]
         self.assertEqual([row["wheel"] for row in rows], [wheel()["wheel"]])
+
+    ATOM = {"a": "http://www.w3.org/2005/Atom"}
+
+    def feed(self, site):
+        """feed.xml parsed, after the checks every feed must pass: Atom's required elements, RFC 3339 dates and
+        unique entry ids."""
+        root = ElementTree.fromstring((site / "feed.xml").read_bytes())
+        self.assertEqual(root.tag, "{http://www.w3.org/2005/Atom}feed")
+        date = re.compile(r"\d{4}-\d{2}-\d{2}T00:00:00Z")
+        entries = root.findall("a:entry", self.ATOM)
+        for node in [root, *entries]:
+            for required in ("id", "title", "updated"):
+                self.assertEqual(len(node.findall(f"a:{required}", self.ATOM)), 1, required)
+            self.assertRegex(node.findtext("a:updated", namespaces=self.ATOM), date)
+        ids = [entry.findtext("a:id", namespaces=self.ATOM) for entry in entries]
+        self.assertEqual(len(ids), len(set(ids)), ids)
+        return root, entries
+
+    def test_feed_lists_the_wheels_in_the_index_newest_first(self):
+        lz4 = "lz4-4.4.5-cp314-cp314-win_arm64.whl"
+        gone = "regex-1.0-cp314-cp314-win_arm64.whl"
+        wheels = [
+            wheel(published="2026-11-16"),
+            wheel(name="lz4", file=lz4, version="4.4.5", published="2026-11-17"),
+            wheel(name="regex", file=gone, version="1.0", published="2026-11-18"),  # PyPI has its own now
+            wheel(name="zstd", file="zstd-1.0-cp314-cp314-win_arm64.whl", version="1.0", published="2026-11-19"),
+            wheel(name="Zope.Interface", file="zope_interface-8.7-cp314-cp314-win_arm64.whl", version="8.7",
+                  published="2026-11-17"),
+        ]  # fmt: skip
+        pypi = {"regex": [pypi_file(gone)], "zstd": [pypi_file("zstd-1.0.tar.gz", yanked="bad build")]}
+        site = self.build(wheels, pypi)
+        root, entries = self.feed(site)
+        text = lambda node, tag: node.findtext(f"a:{tag}", namespaces=self.ATOM)
+        self.assertEqual(text(root, "id"), "https://wheelgap.github.io/wheels/feed.xml")
+        self.assertEqual(text(root, "title"), "wheelgap gap wheels")
+        self.assertEqual(root.findtext("a:author/a:name", namespaces=self.ATOM), "wheelgap")
+        self.assertIn("Unofficial", text(root, "subtitle"))
+        self.assertEqual(root.find("a:link[@rel='self']", self.ATOM).get("href"), "https://wheelgap.github.io/wheels/feed.xml")
+        self.assertEqual(text(root, "updated"), "2026-11-19T00:00:00Z")  # the newest entry's
+        # Newest first, then by project and file name, reversed. The yanked one is in; the withdrawn one isn't.
+        release = "https://github.com/wheelgap/wheels/releases/download/gap-wheels/"
+        self.assertEqual(
+            [text(entry, "id") for entry in entries],
+            [release + name for name in ("zstd-1.0-cp314-cp314-win_arm64.whl",
+                                         "zope_interface-8.7-cp314-cp314-win_arm64.whl", lz4, wheel()["wheel"])],
+        )
+        entry = entries[2]
+        self.assertEqual(text(entry, "title"), "lz4 4.4.5 for 3.14 win-arm64")
+        self.assertEqual(entry.find("a:link", self.ATOM).get("href"), "https://wheelgap.github.io/wheels/#lz4")
+        self.assertEqual(text(entry, "updated"), "2026-11-17T00:00:00Z")
+        summary = text(entry, "summary")
+        self.assertIn("pip install --extra-index-url https://wheelgap.github.io/wheels/simple/ lz4==4.4.5", summary)
+        self.assertIn(f"sha256: {SHA}", summary)
+        self.assertIn("Unofficial wheel, built by wheelgap from the PyPI sdist", summary)
+        # The page links the feed, in its head and next to status.json, and each entry's link is a row's anchor.
+        page = (site / "index.html").read_text(encoding="utf-8")
+        head = page.split("</head>", 1)[0]
+        self.assertIn('<link rel="alternate" type="application/atom+xml" href="feed.xml" title="New gap wheels">', head)
+        self.assertIn('<a href="feed.xml">Atom feed</a>', page.split("</head>", 1)[1])
+        self.assertIn('<tr id="lz4">', page)
+        # Left out with --omit-failing: not in the feed either.
+        bad = pypi_file("lz4-4.4.5.tar.gz", url="https://untrusted.example/sdist.tar.gz")
+        _, entries = self.feed(self.build(wheels[:2], {"lz4": [bad]}, omit_failing=True))
+        self.assertEqual([text(entry, "id") for entry in entries], [release + wheel()["wheel"]])
+
+    def test_feed_is_capped_at_50_entries(self):
+        wheels = [
+            wheel(name=f"pkg{n}", file=f"pkg{n}-1.0-cp314-cp314-win_arm64.whl", published=f"2026-10-{n % 28 + 1:02d}")
+            for n in range(60)
+        ]
+        root, entries = self.feed(self.build(wheels))
+        self.assertEqual(len(entries), 50)
+        days = [entry.findtext("a:updated", namespaces=self.ATOM) for entry in entries]
+        self.assertEqual(days, sorted(days, reverse=True))
+        self.assertEqual(days[0], "2026-10-28T00:00:00Z")
+        self.assertEqual(root.findtext("a:updated", namespaces=self.ATOM), days[0])
+        self.assertGreater(days[-1], "2026-10-03T00:00:00Z")  # the ten oldest are the ones dropped
+
+    def test_feed_skips_an_entry_without_a_valid_published_date(self):
+        names = ("none", "day", "notpadded", "number", "time", "markup", "trailing")
+        values = (None, "2026-02-30", "2026-1-5", 20261116, "2026-11-16T00:00:00Z", "<x>", "2026-11-16\n")
+        wheels = [wheel(published="2026-11-16")]
+        for name, value in zip(names, values, strict=True):
+            w = wheel(name=name, file=f"{name}-1.0-cp314-cp314-win_arm64.whl")
+            if value is not None:
+                w["published"] = value
+            wheels.append(w)
+        site = self.build(wheels)
+        _, entries = self.feed(site)
+        self.assertEqual([entry.findtext("a:title", namespaces=self.ATOM) for entry in entries],
+                         ["tiktoken 0.14.0 for 3.14 win-arm64"])
+        # They are still in the index and on the page: only the feed needs the date.
+        self.assertEqual(len(json.loads((site / "data/status.json").read_text())["wheels"]), 8)
+
+    def test_feed_escapes_free_text(self):
+        odd = wheel(target='<x>&"', version="1.0]]>\x00\x0b<!--", published="2026-11-16")
+        site = self.build([odd, wheel(name="lz4", file="lz4-4.4.5-cp314-cp314-win_arm64.whl", version=None, target=3,
+                                      published="2026-11-15")])  # fmt: skip
+        raw = (site / "feed.xml").read_text(encoding="utf-8")
+        self.assertIn("for &lt;x&gt;&amp;&quot;</title>", raw)
+        self.assertNotIn("<x>", raw)
+        self.assertNotIn("\x00", raw)
+        _, entries = self.feed(site)
+        # Control characters XML can't carry are dropped; everything else comes back as it was written.
+        self.assertEqual(entries[0].findtext("a:title", namespaces=self.ATOM), 'tiktoken 1.0]]><!-- for <x>&"')
+        # A version or target that isn't a string: the title is the file name.
+        self.assertEqual(entries[1].findtext("a:title", namespaces=self.ATOM), "lz4-4.4.5-cp314-cp314-win_arm64.whl")
+
+    def test_feed_updated_comes_from_the_data_never_the_clock(self):
+        gone = "regex-1.0-cp314-cp314-win_arm64.whl"
+        withdrawn = wheel(name="regex", file=gone, version="1.0", published="2026-11-18")
+        updated = lambda site: self.feed(site)[0].findtext("a:updated", namespaces=self.ATOM)
+        # No entries: the newest `published` of any record, or the epoch when there is none.
+        site = self.build([withdrawn, wheel(name="lz4", file="lz4-1.0-cp314-cp314-win_arm64.whl", published="2026-11-01"),
+                           wheel()], {"regex": [pypi_file(gone)], "lz4": [pypi_file("lz4-1.0-cp314-cp314-win_arm64.whl")]})  # fmt: skip
+        self.assertEqual(updated(site), "2026-11-18T00:00:00Z")
+        self.assertEqual(self.feed(site)[1], [])
+        self.assertEqual(updated(self.build([wheel()])), "1970-01-01T00:00:00Z")
+        self.assertEqual(updated(self.build([])), "1970-01-01T00:00:00Z")
+        # With entries: the newest entry's, not a newer withdrawn record's.
+        site = self.build([withdrawn, wheel(published="2026-11-16")], {"regex": [pypi_file(gone)]})
+        self.assertEqual(updated(site), "2026-11-16T00:00:00Z")
+
+    def test_feed_is_identical_for_identical_inputs(self):
+        wheels = [wheel(published="2026-11-16"),
+                  wheel(name="lz4", file="lz4-4.4.5-cp314-cp314-win_arm64.whl", version="4.4.5", published="2026-11-16")]
+        a = (self.build(wheels) / "feed.xml").read_bytes()
+        b = (self.build(list(reversed(wheels))) / "feed.xml").read_bytes()
+        self.assertEqual(a, b)
+        self.assertTrue(a.startswith(b'<?xml version="1.0" encoding="utf-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom">\n'))
+        self.assertTrue(a.endswith(b"</feed>\n"))
+
+    def test_feed_lists_a_file_recorded_twice_once(self):
+        _, entries = self.feed(self.build([wheel(published="2026-11-16"), wheel(published="2026-11-17")]))
+        self.assertEqual(len(entries), 1)
+
+    def test_a_failed_fetch_writes_no_feed(self):
+        bad = pypi_file("tiktoken-0.14.0.tar.gz", url="https://untrusted.example/sdist.tar.gz")
+        site = self.build([wheel(published="2026-11-16")], {"tiktoken": [bad]}, expect=1)
+        self.assertFalse((site / "feed.xml").exists())
+        self.assertFalse(site.exists())
+
+    def test_current_published_data_makes_a_feed_of_every_entry_or_the_newest_50(self):
+        path = Path(__file__).resolve().parents[1] / "data" / "gap-wheels.json"
+        published = json.loads(path.read_text(encoding="utf-8"))["wheels"]
+        by_project = build_gap_index.projects(published)
+        status = {(project, w["wheel"]): "in-index" for project, wheels in by_project.items() for w in wheels}
+        root = ElementTree.fromstring(build_gap_index.feed(by_project, status))
+        entries = root.findall("a:entry", self.ATOM)
+        self.assertEqual(len(entries), min(len(published), 50))
+        self.assertEqual(root.findtext("a:updated", namespaces=self.ATOM),
+                         max(w["published"] for w in published) + "T00:00:00Z")
 
 
 class Requests(Index):

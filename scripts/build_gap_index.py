@@ -6,8 +6,8 @@ Writes <site>/simple/index.html (every project), <site>/simple/<project>/index.h
 is, how to use it with pip and uv, how the wheels are made and how a project opts out; each package's rows have an
 anchor, #<project>, and say who asked for it when data/gap-wheel-requests.json names someone, and which library a
 wheel built with a library recipe bundles) and
-<site>/data/gap-wheels.json (the transparency record), and <site>/data/status.json (the current installability
-state of each recorded wheel). gap_wheels.py publish writes the raw JSON. Plain HTML, no JavaScript. The site is
+<site>/data/gap-wheels.json (the transparency record), <site>/data/status.json (the current installability
+state of each recorded wheel) and <site>/feed.xml (an Atom feed of the wheels in the index, newest first). gap_wheels.py publish writes the raw JSON. Plain HTML, no JavaScript. The site is
 wheelgap.github.io/wheels/; it shares wheelgap.github.io with the tracker, whose stylesheet it uses.
 
 Each project page lists every file PyPI lists for that project (read from PyPI's JSON simple API, linked to
@@ -24,6 +24,7 @@ is left out of the index instead, with a warning.
 from __future__ import annotations
 
 import argparse
+import datetime
 import html
 import http.client
 import json
@@ -33,7 +34,7 @@ import time
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 BASE_URL = "https://wheelgap.github.io/wheels/"
 TRACKER = "https://wheelgap.github.io/tracker/"
@@ -52,6 +53,17 @@ OPT_OUT_URL = (
     "https://github.com/wheelgap/wheels/issues/new?title=Opt-out%3A%20PROJECT"
     "&body=Please%20stop%20publishing%20gap%20wheels%20for%20PROJECT."
 )
+# The public form for a wheel that doesn't install, import or run (.github/ISSUE_TEMPLATE/broken-wheel.yml), and
+# GitHub's private report for one that looks unsafe (SECURITY.md).
+BROKEN_WHEEL_URL = "https://github.com/wheelgap/wheels/issues/new?template=broken-wheel.yml"
+ADVISORY_URL = "https://github.com/wheelgap/wheels/security/advisories/new"
+
+
+def report_url(wheel: str) -> str:
+    """The broken-wheel form with this file name filled in: GitHub fills an issue form's field from a query parameter
+    named after the field's id (`wheel` in broken-wheel.yml), and the title from `title`."""
+    name = quote(wheel, safe="")
+    return f"{BROKEN_WHEEL_URL}&wheel={name}&title=Broken%20wheel%3A%20{name}"
 
 
 def canonical(name: str) -> str:
@@ -343,13 +355,99 @@ def read_requests(path: Path) -> dict[str, dict[str, str]]:
     return out
 
 
+def install_command(project: str, wheel: str) -> str | None:
+    """The pip command that installs this wheel's release from the index, pinned to the version in its file name
+    (never the entry's `version`, which is free text); None when the file name isn't this project's or its version
+    isn't plain."""
+    parsed = wheel_tags(wheel)
+    if parsed is None or parsed[0] != project or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.]*", parsed[1], re.ASCII):
+        return None
+    return f"pip install --extra-index-url {INDEX_URL} {project}=={parsed[1]}"
+
+
+FEED_URL = f"{BASE_URL}feed.xml"
+FEED_MAX = 50
+PUBLISHED = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
+# What XML 1.0 can't carry, even as a character reference: most control characters, lone surrogates, U+FFFE and U+FFFF.
+NOT_XML = re.compile("[^\t\n\r\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
+
+
+def published_day(w: dict) -> str | None:
+    """An entry's `published` if it is a real date written YYYY-MM-DD (as gap_wheels.py publish writes it), or None."""
+    day = w.get("published")
+    if not isinstance(day, str) or not PUBLISHED.fullmatch(day):
+        return None
+    try:
+        datetime.date.fromisoformat(day)
+    except ValueError:
+        return None
+    return day
+
+
+def xml_text(text: str) -> str:
+    """Text for an XML element or a quoted attribute."""
+    return html.escape(NOT_XML.sub("", text))
+
+
+def feed(by_project: dict[str, list[dict]], status: dict[tuple[str, str], str]) -> str:
+    """feed.xml: an Atom 1.0 feed (RFC 4287) of the wheels in the index (`in-index` or `yanked` in `status`), newest
+    first by `published`, at most FEED_MAX. An entry without a valid `published` is left out. Every date comes from the
+    data, none from the clock, so the same inputs give the same bytes."""
+    x = xml_text
+    listed: dict[str, tuple[str, str, dict]] = {}  # by file name, which is the entry's id: the first record of a file
+    days = []
+    for project, wheels in by_project.items():
+        for w in wheels:
+            day = published_day(w)
+            if day is None:
+                continue
+            days.append(day)
+            if status.get((project, w["wheel"])) in ("in-index", "yanked"):
+                listed.setdefault(w["wheel"], (day, project, w))
+    newest = sorted(listed.values(), key=lambda item: (item[0], item[1], item[2]["wheel"]), reverse=True)[:FEED_MAX]
+    updated = newest[0][0] if newest else max(days, default="1970-01-01")
+    entries = []
+    for day, project, w in newest:
+        version, target = w.get("version"), w.get("target")
+        title = f"{w['name']} {version} for {target}" if isinstance(version, str) and isinstance(target, str) else w["wheel"]
+        command = install_command(project, w["wheel"])
+        summary = "Unofficial wheel, built by wheelgap from the PyPI sdist; not from the package's maintainers. "
+        summary += (f"Install: {command} " if command else "") + f"sha256: {w['sha256']}"
+        entries.append(
+            "  <entry>\n"
+            f"    <id>{x(RELEASE_URL + w['wheel'])}</id>\n"
+            f"    <title>{x(title)}</title>\n"
+            f'    <link href="{x(BASE_URL + "#" + project)}"/>\n'
+            f"    <updated>{day}T00:00:00Z</updated>\n"
+            f"    <summary>{x(summary)}</summary>\n"
+            "  </entry>\n"
+        )
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<feed xmlns="http://www.w3.org/2005/Atom">\n'
+        f"  <id>{x(FEED_URL)}</id>\n"
+        "  <title>wheelgap gap wheels</title>\n"
+        "  <subtitle>Unofficial wheels PyPI doesn't have yet, built by wheelgap from the PyPI sdist; not from the "
+        "packages' maintainers.</subtitle>\n"
+        f"  <updated>{updated}T00:00:00Z</updated>\n"
+        "  <author><name>wheelgap</name></author>\n"
+        f'  <link rel="self" type="application/atom+xml" href="{x(FEED_URL)}"/>\n'
+        f'  <link rel="alternate" type="text/html" href="{x(BASE_URL)}"/>\n' + "".join(entries) + "</feed>\n"
+    )
+
+
 def human_page(
     by_project: dict[str, list[dict]],
     gone: dict[tuple[str, str], str] | None = None,
     requests: dict[str, dict[str, str]] | None = None,
+    yanked: dict[tuple[str, str], str] | None = None,
 ) -> str:
+    """The page. `gone`: why a wheel isn't in the index, and `yanked`: PyPI's reason ("" when it gave none) for a
+    wheel that is in the index but whose release PyPI has yanked, both by (project, wheel file name) as build() keys
+    them."""
     gone = gone or {}
     requests = requests or {}
+    yanked = yanked or {}
     e = html.escape
     rows = []
     for project, wheels in by_project.items():
@@ -364,31 +462,37 @@ def human_page(
                 for i, u in enumerate(builds, 1)
             )
             anchor = f' id="{e(project)}"' if n == 0 else ""
-            parsed = wheel_tags(w["wheel"])
-            filename_version = (
-                parsed[1]
-                if parsed is not None
-                and parsed[0] == project
-                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.]*", parsed[1], re.ASCII)
-                else None
-            )
-            install = (
-                f"<code>pip install --extra-index-url {e(INDEX_URL)} {e(project)}=={e(filename_version)}</code>"
-                if (project, w["wheel"]) not in gone and filename_version is not None
+            command = install_command(project, w["wheel"])
+            install = f"<code>{e(command)}</code>" if (project, w["wheel"]) not in gone and command is not None else ""
+            library = f"<br><small>{e(text)}</small>" if (text := bundled(w)) else ""
+            report = (
+                f'<br><a href="{e(report_url(w["wheel"]))}" aria-label="report a problem with {e(w["wheel"])}">report</a>'
+                if (project, w["wheel"]) not in gone
                 else ""
             )
-            library = f"<br><small>{e(text)}</small>" if (text := bundled(w)) else ""
+            key = (project, w["wheel"])
+            if key in gone:
+                state = gone[key]
+            elif key in yanked:
+                # Still served, and the Install cell's == pin is the one case where pip and uv take a yanked file.
+                # The reason is the package owner's text: one line of printable characters, and not a page of it.
+                why = " ".join("".join(c for c in yanked[key] if c.isprintable() or c.isspace()).split())
+                if len(why) > 200:
+                    why = why[:200].rstrip() + "…"
+                state = "in the index, but PyPI has yanked this release" + (f": {why}" if why else "")
+            else:
+                state = "in the index"
             rows.append(
                 f'          <tr{anchor}><td><a href="{e(TRACKER)}p/{e(project)}/">{e(w["name"])}</a>{note}</td>'
                 f"<td>{e(str(w.get('version', '')))}</td><td>{e(str(w.get('target', '')))}</td>"
                 f"<td>{e(str(w.get('verified') or ''))}</td><td>{links}</td>"
                 f'<td><a href="{e(RELEASE_URL + w["wheel"])}" aria-label="wheel {e(w["wheel"])}">wheel</a>'
-                f'<br><small title="{e(w["sha256"])}">{e(w["sha256"][:12])}</small>{library}</td>'
+                f'<br><small title="{e(w["sha256"])}">{e(w["sha256"][:12])}</small>{library}{report}</td>'
                 f"<td>{install}</td>"
-                f"<td>{e(gone.get((project, w['wheel']), 'in the index'))}</td></tr>"
+                f"<td>{e(state)}</td></tr>"
             )
     count = sum(len(v) for v in by_project.values()) - len(gone)
-    # The heading's id has an underscore so no package row's id (a canonical name: a-z, 0-9 and -) can clash with it.
+    # A heading's id has an underscore so no package row's id (a canonical name: a-z, 0-9 and -) can clash with it.
     table = (
         '        <div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published_wheels"><table class="matrix">\n'
         '          <thead><tr><th scope="col">Package</th><th scope="col">Version</th>'
@@ -411,6 +515,7 @@ def human_page(
   <link rel="canonical" href="{e(BASE_URL)}">
   <link rel="stylesheet" href="/tracker/style.css">
   <link rel="icon" href="/tracker/favicon.svg" type="image/svg+xml">
+  <link rel="alternate" type="application/atom+xml" href="feed.xml" title="New gap wheels">
 </head>
 <body>
   <header class="wrap">
@@ -419,11 +524,13 @@ def human_page(
     <p class="lede">Some popular Python packages don't have a wheel on PyPI yet for Windows on ARM, for free-threaded Python 3.14t, for Alpine Linux on ARM or for Python 3.15. When that happens pip tries to build them from source, which needs Rust or a C compiler and often fails. These are the missing wheels. {count} so far.</p>
   </header>
   <main class="wrap">
+    <p>These wheels are unofficial. wheelgap builds each one from the sdist PyPI has for that release. The package's maintainers didn't build them and haven't reviewed them. If one doesn't work or looks wrong, <a href="#report_a_problem">report it here</a>, not to the package.</p>
     <section>
       <h2>How to use it</h2>
       <p>With pip, add this index next to PyPI:</p>
       <pre><code>pip install --extra-index-url {e(INDEX_URL)} PACKAGE</code></pre>
-      <p>pip still gets everything else from PyPI. It only takes a wheel from here when PyPI doesn't have one for your machine.</p>
+      <p>Where PyPI is pip's other index, pip still gets everything else from PyPI, and only takes a wheel from here when PyPI doesn't have one for your machine. pip treats every index alike, so do this only if the packages below come from PyPI: not if a private index (set in <code>pip.conf</code>, say) has packages of the same names.</p>
+      <p>If your requirements file pins hashes (<code>--require-hashes</code>), also add each wheel's hash to its line, or pip won't use the wheel: <code>NAME==VERSION --hash=sha256:…</code>, with the wheel's full sha256. It's in <a href="data/status.json">status.json</a>, as the <code>sha256</code> of the row whose <code>wheel</code> is the file name. The table below shows only its first 12 characters.</p>
       <p>With uv, add the index to <code>pyproject.toml</code> and point only the packages you need at it. uv only applies <code>[tool.uv.sources]</code> to your direct dependencies, so if a package comes in through another one (tokenizers through transformers, say), add it to <code>dependencies</code> as well:</p>
       <pre><code>[[tool.uv.index]]
 name = "wheelgap"
@@ -432,7 +539,10 @@ explicit = true
 
 [tool.uv.sources]
 tokenizers = {{ index = "wheelgap" }}</code></pre>
+      <p>Then run <code>uv lock</code>. If <code>pyproject.toml</code> already has a <code>[tool.uv.sources]</code> table, add the package's line to it instead of a second one.</p>
       <p>uv takes all of a package's files from one index, so each package's page here lists every file PyPI has for it too, with PyPI's own links and hashes, plus our wheel. Everything else still comes from PyPI. <code>uv pip install --extra-index-url {e(INDEX_URL)} PACKAGE</code> works too.</p>
+      <p>Other lockfiles (Poetry, PDM and the like) pin each file, so add <code>{e(INDEX_URL)}</code> as an index (for these packages only, if the tool allows it) where that lockfile is made, then lock again. An index that isn't limited to these packages has the same risk as with pip: don't add it if a private index has packages of the same names.</p>
+      <p><a href="https://github.com/wheelgap/wheelgap">wheelgap</a> has a <code>--fix</code> option on its main branch, not in a release yet, that prints these lines for the packages in your own requirements file or lockfile.</p>
       <p>The PyPI part of the list is refreshed every hour, so with uv a release uploaded in the last hour may not show up yet for these packages. If PyPI can't be read, the index isn't updated at all, rather than going up with files missing. The pages are plain HTML, which has no upload times, so uv's <code>exclude-newer</code> finds no files for these packages here.</p>
       <p>Each wheel is for one release. If a newer release comes out without a wheel, pip or uv will try to build that one instead. Add <code>--prefer-binary</code> (pip) to keep using the wheel here. When the release ships its own wheel for the same platform, ours drops out of the index.</p>
     </section>
@@ -446,10 +556,18 @@ tokenizers = {{ index = "wheelgap" }}</code></pre>
         <li>A few packages need a C library the build image doesn't have (PyYAML needs libyaml). For those the library is built first, from one fixed source file whose hash is checked, and linked into the wheel, with its licence text included. The table says which library and version such a wheel bundles, and the install test checks it's really the one in use.</li>
         <li>Installed and imported on a fresh machine before it goes up. On free-threaded Python the GIL has to stay off. This checks that it works, it's not a security check.</li>
         <li>pip checks each file's hash when it downloads it. You can also check where a file came from with <code>gh attestation verify FILE.whl -R wheelgap/wheels</code>.</li>
-        <li>Every wheel, its source hash and both build runs are listed in <a href="data/gap-wheels.json">gap-wheels.json</a>; the machine-readable <a href="data/status.json">status.json</a> shows which ones are currently in the index, yanked or withdrawn.</li>
+        <li>Every wheel, its source hash and both build runs are listed in <a href="data/gap-wheels.json">gap-wheels.json</a>; the machine-readable <a href="data/status.json">status.json</a> shows which ones are currently in the index, yanked or withdrawn. New wheels are announced in an <a href="feed.xml">Atom feed</a>.</li>
       </ul>
       <p>One thing to know: a wheel here is only as safe as the source it was built from. Installing the package the normal way runs the same code. Only packages with an OSI-approved licence (or the PSF licence Python uses) go up. Some Windows wheels also carry Microsoft's Visual C++ runtime DLLs (in a <code>.libs</code> folder), redistributed under Visual Studio's terms, as many wheels on PyPI do.</p>
-      <p>The platforms: Windows on ARM for Python 3.14 and 3.14t, Windows x64 for Python 3.15, Linux x86_64 (glibc 2.28 or newer: <code>manylinux_2_28</code>) for Python 3.14t and 3.15, and Alpine Linux on ARM (<code>musllinux_1_2</code>) for Python 3.14. Every wheel goes up only after a maintainer approves a publish run that includes it; the table below shows which are here.</p>
+      <p>The platforms: Windows on ARM for Python 3.14 and 3.14t, Windows x64 for Python 3.15, Linux x86_64 (glibc 2.28 or newer: <code>manylinux_2_28</code>) for Python 3.14t and 3.15, and Alpine Linux on ARM (<code>musllinux_1_2</code>) for Python 3.14. Every wheel goes up only after a wheelgap maintainer approves a publish run that includes it; the table below shows which are here.</p>
+    </section>
+    <section>
+      <h2 id="report_a_problem">Problems with a wheel</h2>
+      <p>These wheels come from wheelgap, not from the package's maintainers, so a problem with one belongs here, not in the package's issue tracker.</p>
+      <ul>
+        <li>If a wheel doesn't install, doesn't import or fails when you use it, fill in the <a href="{e(BROKEN_WHEEL_URL)}">broken-wheel form</a>. The "report" link in a wheel's row below opens the form with its file name filled in.</li>
+        <li>If a wheel looks unsafe or tampered with, <a href="{e(ADVISORY_URL)}">report it privately</a>, never in a public issue. A wheel reported this way is taken down first and investigated after: it's removed from the index and the release while we look.</li>
+      </ul>
     </section>
     <section>
       <h2>If it's your package</h2>
@@ -519,7 +637,7 @@ def build(
         (simple / project).mkdir(exist_ok=True)
         (simple / project / "index.html").write_text(simple_page(f"Links for {project}", links), encoding="utf-8")
     requests = read_requests(index_path.parent / "gap-wheel-requests.json")
-    (site / "index.html").write_text(human_page(by_project, gone, requests), encoding="utf-8")
+    (site / "index.html").write_text(human_page(by_project, gone, requests, yanked), encoding="utf-8")
     (site / "data").mkdir(exist_ok=True)
     (site / "data" / "gap-wheels.json").write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
     # Each status is set where build() decides it, never parsed back out of `gone`'s text. `usable` doesn't check
@@ -546,6 +664,7 @@ def build(
         ),
     }
     (site / "data" / "status.json").write_text(json.dumps(wheel_status, indent=1) + "\n", encoding="utf-8")
+    (site / "feed.xml").write_text(feed(by_project, status), encoding="utf-8")
     listed_count = sum(1 for p in pages for w in by_project[p] if (p, w["wheel"]) not in gone)
     print(f"gap wheels: {listed_count} wheels of {len(pages)} projects listed, {len(gone)} withdrawn")
     for (project, name), why in sorted(gone.items()):

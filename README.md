@@ -9,6 +9,14 @@ working.)
 pip install --extra-index-url https://wheelgap.github.io/wheels/simple/ PACKAGE
 ```
 
+pip treats every index alike, so do this only if the packages you install from here come from PyPI: not if a private
+index (set in `pip.conf`, say) has packages of the same names.
+
+If your requirements file pins hashes (`--require-hashes`), also add each wheel's hash to its line, or pip won't use
+the wheel: `NAME==VERSION --hash=sha256:…`, with the wheel's full sha256. It's in
+[`data/status.json`](https://wheelgap.github.io/wheels/data/status.json), as the `sha256` of the row whose `wheel` is
+the file name.
+
 uv works too. Pin the packages you need to the index in `pyproject.toml`. uv only applies `[tool.uv.sources]` to direct
 dependencies, so a package that comes in through another one (tokenizers through transformers) must also be listed
 in `dependencies`:
@@ -22,6 +30,17 @@ explicit = true
 [tool.uv.sources]
 tokenizers = { index = "wheelgap" }
 ```
+
+Then run `uv lock`. If `pyproject.toml` already has a `[tool.uv.sources]` table, add the package's line to it instead
+of a second one.
+
+Other lockfiles (Poetry, PDM and the like) pin each file, so add `https://wheelgap.github.io/wheels/simple/` as an
+index (for these packages only, if the tool allows it) where that lockfile is made, then lock again. An index that
+isn't limited to these packages has the same risk as with pip: don't add it if a private index has packages of the
+same names.
+
+[wheelgap](https://github.com/wheelgap/wheelgap) has a `--fix` option on its main branch, not in a release yet, that
+prints these lines for the packages in your own requirements file or lockfile.
 
 uv takes all of a package's files from one index, so each project's page here lists every file PyPI has for it as well
 (PyPI's own links and hashes, refreshed hourly), plus our wheel. A lockfile made this way has the same files and hashes
@@ -109,6 +128,8 @@ pinned with `==`); `withdrawn-pypi-has-wheel` (PyPI now has a wheel that install
 `withdrawn-release-gone` (PyPI no longer lists the release); or `left-out-pypi-unreadable` (left out of this deploy
 because PyPI couldn't be read, back at the next good build). `yank_reason` is PyPI's reason for a yanked wheel (`""`
 when it gave none) and `null` otherwise. A wheel that was taken down or opted out has no entry.
+[`feed.xml`](https://wheelgap.github.io/wheels/feed.xml), built with it, is an Atom feed of the wheels in the index
+(`in-index` or `yanked`), newest first by publish date, at most 50.
 
 **Bundled Microsoft DLLs.** Some Windows wheels carry Microsoft Visual C++ runtime files (`msvcp140.dll`,
 `vcomp140.dll` and the like) in `<dist>.libs/`. They're Microsoft's, not the package's, redistributed under the
@@ -158,16 +179,24 @@ mysqlclient and h5py anywhere, are skipped by the plan with "no library recipe f
 
 ## Checking a wheel yourself
 
-Use the filename and SHA-256 of a currently published wheel from
-[`data/gap-wheels.json`](data/gap-wheels.json). The examples below use
+To see whether the index serves a wheel now, find the row for its file name in
+[`data/status.json`](https://wheelgap.github.io/wheels/data/status.json): it does when the row's `status` is
+`in-index` or `yanked`. A yanked wheel is still served, but pip and uv only take it with an exact `==` pin.
+[`data/gap-wheels.json`](data/gap-wheels.json) is the full record, with each wheel's `sha256`, `sdist_sha256` and
+`builds`. It doesn't say whether a wheel is current: an entry stays there after its wheel drops out of the index
+because PyPI shipped its own or the release is gone from PyPI. The examples below print the status first, then
+check the file's hash against the record. They use
 `lightgbm-4.7.0-cp314-cp314-win_arm64.whl` and `lz4-4.4.5-cp314-cp314t-manylinux_2_28_x86_64.whl`;
-substitute another published filename for your platform. The attestation check needs the
+substitute another filename for your platform. The attestation check needs the
 [GitHub CLI](https://cli.github.com/), signed in (`gh auth login`), and the Linux example also needs `jq`.
 
 **Windows (PowerShell):**
 
 ```powershell
 $wheel = "lightgbm-4.7.0-cp314-cp314-win_arm64.whl"
+$status = @()
+$status = @((Invoke-RestMethod "https://wheelgap.github.io/wheels/data/status.json").wheels | Where-Object { $_.wheel -eq $wheel } | ForEach-Object { $_.status })
+if ($status.Count -eq 1 -and $status[0] -in "in-index", "yanked") { "status: $status" } else { Write-Warning "the index doesn't serve $wheel now (status: $(if ($status) { $status -join ', ' } else { 'no entry in status.json' }))" }
 Invoke-WebRequest "https://github.com/wheelgap/wheels/releases/download/gap-wheels/$wheel" -OutFile $wheel -UseBasicParsing
 $index = Invoke-RestMethod "https://raw.githubusercontent.com/wheelgap/wheels/main/data/gap-wheels.json"
 $expected = @($index.wheels | Where-Object { $_.wheel -eq $wheel })
@@ -179,6 +208,13 @@ if ($expected.Count -eq 1 -and $actual -eq $expected[0].sha256) { "sha256 OK"; g
 
 ```sh
 wheel="lz4-4.4.5-cp314-cp314t-manylinux_2_28_x86_64.whl"
+state="$(curl -fsSL https://wheelgap.github.io/wheels/data/status.json \
+  | jq -r --arg wheel "$wheel" '[.wheels[] | select(.wheel == $wheel) | .status] | if length == 0 then "no entry in status.json" else join(", ") end')"
+case "$state" in
+  in-index | yanked) echo "status: $state" ;;
+  "") echo "status.json could not be read" >&2 ;;
+  *) echo "the index doesn't serve $wheel now (status: $state)" >&2 ;;
+esac
 curl -fL "https://github.com/wheelgap/wheels/releases/download/gap-wheels/$wheel" -o "$wheel"
 expected="$(curl -fsSL https://raw.githubusercontent.com/wheelgap/wheels/main/data/gap-wheels.json \
   | jq -r --arg wheel "$wheel" '[.wheels[] | select(.wheel == $wheel) | .sha256] | if length == 1 then .[0] else empty end')"
