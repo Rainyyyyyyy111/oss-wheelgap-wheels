@@ -1497,6 +1497,110 @@
    "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
   },
   {
+   "name": "pyyaml",
+   "version": "6.0.3",
+   "target": "3.15 linux-x86_64",
+   "wheel": "pyyaml-6.0.3-cp315-cp315-manylinux_2_28_x86_64.whl",
+   "sha256": "74924b97f9ee27711af927108841fc6a06e98961f2fdd050822be946b98d68fa",
+   "sdist": "pyyaml-6.0.3.tar.gz",
+   "sdist_sha256": "d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44846369531",
+    "https://github.com/wheelgap/wheels/actions/runs/44846376681"
+   ],
+   "tools": {
+    "lock_sha256": "ddc2cee4f941d6722b49b50f0877ed5ef1447ea10a2ace320d6fcee46ef806d6",
+    "packages": [
+     {
+      "name": "cython",
+      "version": "3.3.1",
+      "sha256": "fcb6c86dddaedd1da5d77ba2469c1a4bea52442e02d8f0653ff78667fbaaa8d9",
+      "filename": "cython-3.3.1-cp315-cp315-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+     },
+     {
+      "name": "pip",
+      "version": "26.3",
+      "sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13",
+      "filename": "pip-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "setuptools",
+      "version": "84.2.1",
+      "sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2",
+      "filename": "setuptools-84.2.1-py3-none-any.whl"
+     }
+    ],
+    "repair_packages": [
+     {
+      "name": "auditwheel",
+      "version": "6.8.2",
+      "sha256": "05fd2dd4b743217cd5f66066adc95b03a079424b1f0a878ad1e40fe2cdea4704",
+      "filename": "auditwheel-6.8.2-py3-none-any.whl"
+     },
+     {
+      "name": "packaging",
+      "version": "26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "filename": "packaging-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "patchelf",
+      "version": "0.19.1.0",
+      "sha256": "a8f6331ccf40c345507279f755f4a38c2cb00b9efda746fd43c17713cce0aba4",
+      "filename": "patchelf-0.19.1.0-py3-none-manylinux1_x86_64.manylinux_2_5_x86_64.musllinux_1_1_x86_64.whl"
+     },
+     {
+      "name": "pip",
+      "version": "26.3",
+      "sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13",
+      "filename": "pip-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "pyelftools",
+      "version": "0.33",
+      "sha256": "f215ad5f47d3f1373a21496a6c9e0707c622840d0622f23ff7ce08678b020036",
+      "filename": "pyelftools-0.33-py3-none-any.whl"
+     }
+    ],
+    "repair_tools": [
+     {
+      "requirement": "packaging==26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+     },
+     {
+      "requirement": "wheel==0.48.0",
+      "sha256": "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab"
+     }
+    ],
+    "python": "3.15.2",
+    "python_build": "3.15.2 (main, Nov 13 2026, 20:21:41) [GCC 14.2.1 20250110 (Red Hat 14.2.1-11)]",
+    "runner_image": "quay.io/pypa/manylinux_2_28_x86_64@sha256:d086f64cddcace250ef0f0073583c51b8298159303290a730c9f59bd91edfd2c",
+    "compiler": {
+     "cc": "/opt/rh/gcc-toolset-14/root/usr/bin/cc: cc (GCC) 14.2.1 20250110 (Red Hat 14.2.1-11) Copyright (C) 2024 Free Software Foundation, Inc. This is free software; see the source for copying conditions. There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+     "link": "/opt/rh/gcc-toolset-14/root/usr/bin/ld: GNU ld version 2.41-4.el8_10.1 Copyright (C) 2023 Free Software Foundation, Inc. This program is free software; you may redistribute it under the terms of the GNU General Public License version 3 or (at your option) a later version. This program has absolutely no warranty.",
+     "rustc": "/root/.cargo/bin/rustc: rustc 1.100.0 (0ef1bc386 2026-11-09) binary: rustc commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a commit-date: 2026-11-09 host: x86_64-unknown-linux-gnu release: 1.100.0 LLVM version: 23.1.5",
+     "cmake": "cmake version 4.4.4 CMake suite maintained and supported by Kitware (kitware.com/cmake)."
+    }
+   },
+   "licence": "MIT License",
+   "requires_python": ">=3.8",
+   "verified": "2026-11-21",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44846320489",
+   "recipes": [
+    {
+     "library": "libyaml",
+     "version": "0.2.6",
+     "url": "https://github.com/yaml/libyaml/releases/download/0.2.6/yaml-0.2.6.tar.gz",
+     "sha256": "43b393a117bd4fe39812fddc94e3d654359a3ae05653dcf0110a1122d1747e61",
+     "licence": "MIT",
+     "licence_sha256": "c40112449f254b9753045925248313e9270efa36d226b22d82d4cc6c43c57f29",
+     "recipe_sha256": "e130291e72894c172f88f6e7dd24cc85ed1395eea4b106be625092de90913c13"
+    }
+   ],
+   "published": "2026-11-22",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44846320489"
+  },
+  {
    "name": "rpds-py",
    "version": "2026.9.1",
    "target": "3.14t win-arm64",
