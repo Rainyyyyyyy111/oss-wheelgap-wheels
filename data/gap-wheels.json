@@ -479,6 +479,70 @@
    "publish_run": "https://github.com/wheelgap/tracker/actions/runs/43876448691"
   },
   {
+   "name": "greenlet",
+   "version": "3.5.6",
+   "target": "3.14t win-arm64",
+   "wheel": "greenlet-3.5.6-cp314-cp314t-win_arm64.whl",
+   "sha256": "9f7ab60f0337b04869621a64328ced641bb4c522c9fa0c9d936e195469b2c598",
+   "sdist": "greenlet-3.5.6.tar.gz",
+   "sdist_sha256": "8e67c43bdfc88d5fee6db0d3e40175b362fc95fb85f0412d233b9b203c53a575",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/45238077115",
+    "https://github.com/wheelgap/wheels/actions/runs/45238092416"
+   ],
+   "tools": {
+    "lock_sha256": "0eefd8c29ae9c73da0044c4e26015540b4b68cdba63bb5b773029e97bc2b12b2",
+    "packages": [
+     {
+      "name": "pip",
+      "version": "26.3",
+      "sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13",
+      "filename": "pip-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "setuptools",
+      "version": "84.2.1",
+      "sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2",
+      "filename": "setuptools-84.2.1-py3-none-any.whl"
+     }
+    ],
+    "repair_packages": [],
+    "repair_tools": [
+     {
+      "requirement": "delvewheel==1.13.2",
+      "sha256": "acdb03e1d7040982db65e525065f08163e9dedad54eeb8c7038be61f76c08816"
+     },
+     {
+      "requirement": "packaging==26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+     },
+     {
+      "requirement": "pefile==2024.8.26",
+      "sha256": "76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f"
+     },
+     {
+      "requirement": "wheel==0.48.0",
+      "sha256": "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab"
+     }
+    ],
+    "python": "3.14.10",
+    "python_build": "3.14.10 free-threading build (tags/v3.14.10:b703b2c, Oct 25 2026, 18:21:34) [MSC v.1944 64 bit (ARM64)]",
+    "runner_image": "20261115.219.1",
+    "compiler": {
+     "cc": "C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\MSVC\\14.52.37025\\bin\\Hostarm64\\arm64\\cl.exe: Microsoft (R) C/C++ Optimizing Compiler Version 19.52.37029 for ARM64 Copyright (C) Microsoft Corporation. All rights reserved. Compiler Passes: C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\MSVC\\14.52.37025\\bin\\Hostarm64\\arm64\\cl.exe: Version 19.52.37029.0 C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\M",
+     "link": "C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\MSVC\\14.52.37025\\bin\\Hostarm64\\arm64\\link.exe: Microsoft (R) Incremental Linker Version 14.52.37029.0 Copyright (C) Microsoft Corporation. All rights reserved. usage: LINK [options] [files] [@commandfile] options: /ALIGN:# /ALLOWBIND[:NO] /ALLOWISOLATION[:NO] /APPCONTAINER[:NO] /ASSEMBLYDEBUG[:DISABLE] /ASSEMBLYLINKRESOURCE:filename /ASSEMBLYMODULE:filename /ASSEMBLYRESOURCE:filename",
+     "rustc": "C:\\Users\\runneradmin\\.cargo\\bin\\rustc.EXE: rustc 1.100.0 (0ef1bc386 2026-11-09) binary: rustc commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a commit-date: 2026-11-09 host: aarch64-pc-windows-msvc release: 1.100.0 LLVM version: 23.1.5",
+     "cmake": "cmake version 4.5.0 CMake suite maintained and supported by Kitware (kitware.com/cmake)."
+    }
+   },
+   "licence": "MIT AND PSF-2.0",
+   "requires_python": ">=3.10",
+   "verified": "2026-11-23",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/45235978936",
+   "published": "2026-11-23",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/45235978936"
+  },
+  {
    "name": "hypothesis",
    "version": "6.170.15",
    "target": "3.14t win-arm64",
@@ -496,6 +560,175 @@
    "batch": "https://github.com/wheelgap/tracker/actions/runs/43876448691",
    "published": "2026-11-16",
    "publish_run": "https://github.com/wheelgap/tracker/actions/runs/43876448691"
+  },
+  {
+   "name": "hypothesis",
+   "version": "6.170.17",
+   "target": "3.14t win-arm64",
+   "wheel": "hypothesis-6.170.17-cp314-cp314t-win_arm64.whl",
+   "sha256": "19ab63fea1d9b229027c96b0529c1bfebde940b34ca95ec1824e37910104b933",
+   "sdist": "hypothesis-6.170.17.tar.gz",
+   "sdist_sha256": "bec862247cab5e55f566f9c97f05c9403950609772cad0d13392d64413a3d858",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/45238143820",
+    "https://github.com/wheelgap/wheels/actions/runs/45238163058"
+   ],
+   "tools": {
+    "lock_sha256": "0264458651742b1d183c1562c527aa95ba8868aa4575d36bbd1f4c98c70948c6",
+    "packages": [
+     {
+      "name": "maturin",
+      "version": "1.16.0",
+      "sha256": "95f34ce53249fb7095ff4f2aff64d2562c511d6edf3e216c15dbffcd82b72b4f",
+      "filename": "maturin-1.16.0-py3-none-win_arm64.whl"
+     },
+     {
+      "name": "pip",
+      "version": "26.3",
+      "sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13",
+      "filename": "pip-26.3-py3-none-any.whl"
+     }
+    ],
+    "repair_packages": [],
+    "repair_tools": [
+     {
+      "requirement": "delvewheel==1.13.2",
+      "sha256": "acdb03e1d7040982db65e525065f08163e9dedad54eeb8c7038be61f76c08816"
+     },
+     {
+      "requirement": "packaging==26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+     },
+     {
+      "requirement": "pefile==2024.8.26",
+      "sha256": "76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f"
+     },
+     {
+      "requirement": "wheel==0.48.0",
+      "sha256": "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab"
+     }
+    ],
+    "python": "3.14.10",
+    "python_build": "3.14.10 free-threading build (tags/v3.14.10:b703b2c, Oct 25 2026, 18:21:34) [MSC v.1944 64 bit (ARM64)]",
+    "runner_image": "20261115.219.1",
+    "compiler": {
+     "cc": "C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\MSVC\\14.52.37025\\bin\\Hostarm64\\arm64\\cl.exe: Microsoft (R) C/C++ Optimizing Compiler Version 19.52.37029 for ARM64 Copyright (C) Microsoft Corporation. All rights reserved. Compiler Passes: C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\MSVC\\14.52.37025\\bin\\Hostarm64\\arm64\\cl.exe: Version 19.52.37029.0 C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\M",
+     "link": "C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\MSVC\\14.52.37025\\bin\\Hostarm64\\arm64\\link.exe: Microsoft (R) Incremental Linker Version 14.52.37029.0 Copyright (C) Microsoft Corporation. All rights reserved. usage: LINK [options] [files] [@commandfile] options: /ALIGN:# /ALLOWBIND[:NO] /ALLOWISOLATION[:NO] /APPCONTAINER[:NO] /ASSEMBLYDEBUG[:DISABLE] /ASSEMBLYLINKRESOURCE:filename /ASSEMBLYMODULE:filename /ASSEMBLYRESOURCE:filename",
+     "rustc": "C:\\Users\\runneradmin\\.cargo\\bin\\rustc.EXE: rustc 1.100.0 (0ef1bc386 2026-11-09) binary: rustc commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a commit-date: 2026-11-09 host: aarch64-pc-windows-msvc release: 1.100.0 LLVM version: 23.1.5",
+     "cmake": "cmake version 4.5.0 CMake suite maintained and supported by Kitware (kitware.com/cmake)."
+    }
+   },
+   "licence": "MPL-2.0",
+   "requires_python": ">=3.11",
+   "verified": "2026-11-23",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/45235978936",
+   "published": "2026-11-23",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/45235978936"
+  },
+  {
+   "name": "inflate64",
+   "version": "1.0.4",
+   "target": "3.15 linux-x86_64",
+   "wheel": "inflate64-1.0.4-cp315-cp315-manylinux_2_28_x86_64.whl",
+   "sha256": "8df2d2c6b8eaa217ecb80a07f94694ff5f9b0dddaead67a8d8114b3ea6b73459",
+   "sdist": "inflate64-1.0.4.tar.gz",
+   "sdist_sha256": "b398c686960c029777afc0ed281a86f66adb956cfc3fbf6667cc6453f7b407ce",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/45238179931",
+    "https://github.com/wheelgap/wheels/actions/runs/45238198582"
+   ],
+   "tools": {
+    "lock_sha256": "63539a4ae2cc270a2c4d61c33ded788c8b8a7dbfd83869999e07ac3adbb91d1e",
+    "packages": [
+     {
+      "name": "packaging",
+      "version": "26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "filename": "packaging-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "pip",
+      "version": "26.3",
+      "sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13",
+      "filename": "pip-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "setuptools",
+      "version": "84.2.1",
+      "sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2",
+      "filename": "setuptools-84.2.1-py3-none-any.whl"
+     },
+     {
+      "name": "setuptools-scm",
+      "version": "10.3.4",
+      "sha256": "82f34c3e3084fc2b57d397200637cc13f2338004052d2fee47baa5f0e902464e",
+      "filename": "setuptools_scm-10.3.4-py3-none-any.whl"
+     },
+     {
+      "name": "vcs-versioning",
+      "version": "2.6.0",
+      "sha256": "f8bebd1302ebc12e67ceb30fc7dd698ec969414b6fa43b30c3f14ac9b1e72c41",
+      "filename": "vcs_versioning-2.6.0-py3-none-any.whl"
+     }
+    ],
+    "repair_packages": [
+     {
+      "name": "auditwheel",
+      "version": "6.8.2",
+      "sha256": "05fd2dd4b743217cd5f66066adc95b03a079424b1f0a878ad1e40fe2cdea4704",
+      "filename": "auditwheel-6.8.2-py3-none-any.whl"
+     },
+     {
+      "name": "packaging",
+      "version": "26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "filename": "packaging-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "patchelf",
+      "version": "0.19.1.0",
+      "sha256": "a8f6331ccf40c345507279f755f4a38c2cb00b9efda746fd43c17713cce0aba4",
+      "filename": "patchelf-0.19.1.0-py3-none-manylinux1_x86_64.manylinux_2_5_x86_64.musllinux_1_1_x86_64.whl"
+     },
+     {
+      "name": "pip",
+      "version": "26.3",
+      "sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13",
+      "filename": "pip-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "pyelftools",
+      "version": "0.33",
+      "sha256": "f215ad5f47d3f1373a21496a6c9e0707c622840d0622f23ff7ce08678b020036",
+      "filename": "pyelftools-0.33-py3-none-any.whl"
+     }
+    ],
+    "repair_tools": [
+     {
+      "requirement": "packaging==26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+     },
+     {
+      "requirement": "wheel==0.48.0",
+      "sha256": "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab"
+     }
+    ],
+    "python": "3.15.2",
+    "python_build": "3.15.2 (main, Nov 13 2026, 20:21:41) [GCC 14.2.1 20250110 (Red Hat 14.2.1-11)]",
+    "runner_image": "quay.io/pypa/manylinux_2_28_x86_64@sha256:d086f64cddcace250ef0f0073583c51b8298159303290a730c9f59bd91edfd2c",
+    "compiler": {
+     "cc": "/opt/rh/gcc-toolset-14/root/usr/bin/cc: cc (GCC) 14.2.1 20250110 (Red Hat 14.2.1-11) Copyright (C) 2024 Free Software Foundation, Inc. This is free software; see the source for copying conditions. There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+     "link": "/opt/rh/gcc-toolset-14/root/usr/bin/ld: GNU ld version 2.41-4.el8_10.1 Copyright (C) 2023 Free Software Foundation, Inc. This program is free software; you may redistribute it under the terms of the GNU General Public License version 3 or (at your option) a later version. This program has absolutely no warranty.",
+     "rustc": "/root/.cargo/bin/rustc: rustc 1.100.0 (0ef1bc386 2026-11-09) binary: rustc commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a commit-date: 2026-11-09 host: x86_64-unknown-linux-gnu release: 1.100.0 LLVM version: 23.1.5",
+     "cmake": "cmake version 4.4.4 CMake suite maintained and supported by Kitware (kitware.com/cmake)."
+    }
+   },
+   "licence": "GNU Lesser General Public License v2 or later (LGPLv2+)",
+   "requires_python": ">=3.9",
+   "verified": "2026-11-23",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/45235978936",
+   "published": "2026-11-23",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/45235978936"
   },
   {
    "name": "lightgbm",
@@ -534,6 +767,94 @@
    "batch": "https://github.com/wheelgap/wheels/actions/runs/44098125669",
    "published": "2026-11-17",
    "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44098125669"
+  },
+  {
+   "name": "lightgbm",
+   "version": "4.7.0",
+   "target": "3.14t win-arm64",
+   "wheel": "lightgbm-4.7.0-cp314-cp314t-win_arm64.whl",
+   "sha256": "d609ff46fc2727ea6b7938d8f8dc7834907e1eab5e70df9c42fae2ec51b616f8",
+   "sdist": "lightgbm-4.7.0.tar.gz",
+   "sdist_sha256": "f8e20f682c9aabd000bcf4a7ed8aa6f473c1adfecccae34ec24e823d156f4af0",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/45238397572",
+    "https://github.com/wheelgap/wheels/actions/runs/45238414131"
+   ],
+   "tools": {
+    "lock_sha256": "330ec53d883e9a9d7251ccf59904d484010379347354e2690bd186eac01ac374",
+    "packages": [
+     {
+      "name": "cmake",
+      "version": "4.4.5",
+      "sha256": "cf9dc9375c239a56952b6e25b4e81b9f6f3d1f53820c92241719d93eb98a9f5b",
+      "filename": "cmake-4.4.5-py3-none-win_arm64.whl"
+     },
+     {
+      "name": "ninja",
+      "version": "1.13.2",
+      "sha256": "1db9852e528efa7702f5123969f86678663e46d57ff28ab13f5fd84d64a85fb1",
+      "filename": "ninja-1.13.2-py3-none-win_arm64.whl"
+     },
+     {
+      "name": "packaging",
+      "version": "26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "filename": "packaging-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "pathspec",
+      "version": "1.1.1",
+      "sha256": "a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189",
+      "filename": "pathspec-1.1.1-py3-none-any.whl"
+     },
+     {
+      "name": "pip",
+      "version": "26.3",
+      "sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13",
+      "filename": "pip-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "scikit-build-core",
+      "version": "1.1.2",
+      "sha256": "7f4f959a467692db50bdd1ea7ce1507f2c7972e6023b753ee302d169bc4cec85",
+      "filename": "scikit_build_core-1.1.2-py3-none-any.whl"
+     }
+    ],
+    "repair_packages": [],
+    "repair_tools": [
+     {
+      "requirement": "delvewheel==1.13.2",
+      "sha256": "acdb03e1d7040982db65e525065f08163e9dedad54eeb8c7038be61f76c08816"
+     },
+     {
+      "requirement": "packaging==26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+     },
+     {
+      "requirement": "pefile==2024.8.26",
+      "sha256": "76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f"
+     },
+     {
+      "requirement": "wheel==0.48.0",
+      "sha256": "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab"
+     }
+    ],
+    "python": "3.14.10",
+    "python_build": "3.14.10 free-threading build (tags/v3.14.10:b703b2c, Oct 25 2026, 18:21:34) [MSC v.1944 64 bit (ARM64)]",
+    "runner_image": "20261115.219.1",
+    "compiler": {
+     "cc": "C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\MSVC\\14.52.37025\\bin\\Hostarm64\\arm64\\cl.exe: Microsoft (R) C/C++ Optimizing Compiler Version 19.52.37029 for ARM64 Copyright (C) Microsoft Corporation. All rights reserved. Compiler Passes: C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\MSVC\\14.52.37025\\bin\\Hostarm64\\arm64\\cl.exe: Version 19.52.37029.0 C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\M",
+     "link": "C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\VC\\Tools\\MSVC\\14.52.37025\\bin\\Hostarm64\\arm64\\link.exe: Microsoft (R) Incremental Linker Version 14.52.37029.0 Copyright (C) Microsoft Corporation. All rights reserved. usage: LINK [options] [files] [@commandfile] options: /ALIGN:# /ALLOWBIND[:NO] /ALLOWISOLATION[:NO] /APPCONTAINER[:NO] /ASSEMBLYDEBUG[:DISABLE] /ASSEMBLYLINKRESOURCE:filename /ASSEMBLYMODULE:filename /ASSEMBLYRESOURCE:filename",
+     "rustc": "C:\\Users\\runneradmin\\.cargo\\bin\\rustc.EXE: rustc 1.100.0 (0ef1bc386 2026-11-09) binary: rustc commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a commit-date: 2026-11-09 host: aarch64-pc-windows-msvc release: 1.100.0 LLVM version: 23.1.5",
+     "cmake": "cmake version 4.4.5 CMake suite maintained and supported by Kitware (kitware.com/cmake)."
+    }
+   },
+   "licence": "MIT",
+   "requires_python": ">=3.10",
+   "verified": "2026-11-23",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/45235978936",
+   "published": "2026-11-23",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/45235978936"
   },
   {
    "name": "lz4",
@@ -840,6 +1161,123 @@
    "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
    "published": "2026-11-17",
    "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
+  },
+  {
+   "name": "ml-dtypes",
+   "version": "0.7.0",
+   "target": "3.14 musl-aarch64",
+   "wheel": "ml_dtypes-0.7.0-cp314-cp314-musllinux_1_2_aarch64.whl",
+   "sha256": "46d2f1ae43950f72fa0eb3a1293366e9ec2826f17be14452402a600b63879438",
+   "sdist": "ml_dtypes-0.7.0.tar.gz",
+   "sdist_sha256": "67fd890fb09d1e068cfe1b4dc8e204430ae7632102b4a4f854b093b6f02b3950",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/45239118314",
+    "https://github.com/wheelgap/wheels/actions/runs/45239140638"
+   ],
+   "tools": {
+    "lock_sha256": "9c8c10151428e521778e52db3fc0302bc48edd1664481a9eb49d1dcb268182f7",
+    "packages": [
+     {
+      "name": "cmake",
+      "version": "4.4.5",
+      "sha256": "7d7ef56092bc46b202c3d87796444a0a1db3145cea48523cdd4ebd13fef847b7",
+      "filename": "cmake-4.4.5-py3-none-musllinux_1_2_aarch64.whl"
+     },
+     {
+      "name": "ninja",
+      "version": "1.13.2",
+      "sha256": "0e083700470c02ca154a855ae6d692d03564f5064cae52e113896f9ccc078418",
+      "filename": "ninja-1.13.2-py3-none-musllinux_1_2_aarch64.whl"
+     },
+     {
+      "name": "numpy",
+      "version": "2.5.5",
+      "sha256": "5e202d5facc9c0681834018062466d0b3eabd48c540c3570f72905c97f641a90",
+      "filename": "numpy-2.5.5-cp314-cp314-musllinux_1_2_aarch64.whl"
+     },
+     {
+      "name": "packaging",
+      "version": "26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "filename": "packaging-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "pathspec",
+      "version": "1.1.1",
+      "sha256": "a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189",
+      "filename": "pathspec-1.1.1-py3-none-any.whl"
+     },
+     {
+      "name": "pip",
+      "version": "26.3",
+      "sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13",
+      "filename": "pip-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "scikit-build-core",
+      "version": "1.1.2",
+      "sha256": "7f4f959a467692db50bdd1ea7ce1507f2c7972e6023b753ee302d169bc4cec85",
+      "filename": "scikit_build_core-1.1.2-py3-none-any.whl"
+     }
+    ],
+    "repair_packages": [
+     {
+      "name": "auditwheel",
+      "version": "6.8.2",
+      "sha256": "05fd2dd4b743217cd5f66066adc95b03a079424b1f0a878ad1e40fe2cdea4704",
+      "filename": "auditwheel-6.8.2-py3-none-any.whl"
+     },
+     {
+      "name": "packaging",
+      "version": "26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "filename": "packaging-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "patchelf",
+      "version": "0.19.1.0",
+      "sha256": "b5c3dec03b89db2bb0df301d316360847eeaf72c6fb6ddde0227326655edabb4",
+      "filename": "patchelf-0.19.1.0-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.musllinux_1_1_aarch64.whl"
+     },
+     {
+      "name": "pip",
+      "version": "26.3",
+      "sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13",
+      "filename": "pip-26.3-py3-none-any.whl"
+     },
+     {
+      "name": "pyelftools",
+      "version": "0.33",
+      "sha256": "f215ad5f47d3f1373a21496a6c9e0707c622840d0622f23ff7ce08678b020036",
+      "filename": "pyelftools-0.33-py3-none-any.whl"
+     }
+    ],
+    "repair_tools": [
+     {
+      "requirement": "packaging==26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+     },
+     {
+      "requirement": "wheel==0.48.0",
+      "sha256": "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab"
+     }
+    ],
+    "python": "3.14.10",
+    "python_build": "3.14.10 (main, Nov  5 2026, 19:23:03) [GCC 15.2.0]",
+    "runner_image": "python:3.14-alpine@sha256:5862d971d1f0ae26b258cefa4e893556b1d3aba81bd2ff30888704ad378bab67",
+    "compiler": {
+     "cc": "/usr/bin/cc: cc (Alpine 15.2.0) 15.2.0 Copyright (C) 2025 Free Software Foundation, Inc. This is free software; see the source for copying conditions. There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+     "link": "/usr/bin/ld: GNU ld (GNU Binutils) 2.45.1 Copyright (C) 2025 Free Software Foundation, Inc. This program is free software; you may redistribute it under the terms of the GNU General Public License version 3 or (at your option) a later version. This program has absolutely no warranty.",
+     "rustc": "/root/.cargo/bin/rustc: rustc 1.100.0 (0ef1bc386 2026-11-09) binary: rustc commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a commit-date: 2026-11-09 host: aarch64-unknown-linux-musl release: 1.100.0 LLVM version: 23.1.5",
+     "cmake": "cmake version 4.4.5 CMake suite maintained and supported by Kitware (kitware.com/cmake)."
+    }
+   },
+   "licence": "Apache-2.0",
+   "requires_python": ">=3.10",
+   "verified": "2026-11-23",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/45235978936",
+   "published": "2026-11-23",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/45235978936"
   },
   {
    "name": "numexpr",
