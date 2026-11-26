@@ -2168,8 +2168,15 @@ def opted_out(path: Path) -> set[str]:
     """Canonical project names from the opt-out file (one per line, # comments)."""
     if not path.is_file():
         return set()
-    names = (line.split("#", 1)[0].strip() for line in path.read_text(encoding="utf-8").splitlines())
-    return {build_lab.canonical(n) for n in names if n}
+    names = set()
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        name = line.split("#", 1)[0].strip()
+        if not name:
+            continue
+        if not build_lab.NAME.fullmatch(name):
+            raise ValueError(f"{path}:{line_number}: invalid project name {name!r}")
+        names.add(build_lab.canonical(name))
+    return names
 
 
 def stage_reason(wheel: dict, info: dict | None, optout: set[str]) -> str | None:
@@ -2263,9 +2270,9 @@ def cmd_stage(args: argparse.Namespace) -> int:
     not the potentially large wheel/provenance records.
     """
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    optout = opted_out(Path(args.optout))
     out = Path(args.staged)
     out.mkdir(parents=True, exist_ok=True)
-    optout = opted_out(Path(args.optout))
     staged, lines = [], []
     for wheel in manifest["wheels"]:
         if not tool_provenance_valid(wheel.get("tools")):
@@ -2579,13 +2586,13 @@ def cmd_publish(args: argparse.Namespace) -> int:
     published = {w["wheel"]: w for w in index["wheels"]}
     tested, failed = read_tested(Path(args.tested))
     new, lines = select(staged, tested, staged_dir, published, failed)
+    optout = opted_out(Path(args.optout))
     release = Path(args.release_dir)
     release.mkdir(parents=True, exist_ok=True)
     today = dt.datetime.now(dt.UTC).date().isoformat()
     for w in new:
         shutil.copyfile(staged_dir / w["wheel"], release / w["wheel"])
         index["wheels"].append({**w, "published": today, "publish_run": args.run})
-    optout = opted_out(Path(args.optout))
     withdrawn = [w["wheel"] for w in index["wheels"] if build_lab.canonical(w["name"]) in optout]
     index["wheels"] = sorted((w for w in index["wheels"] if w["wheel"] not in withdrawn),
                              key=lambda w: (build_lab.canonical(w["name"]), w["wheel"]))  # fmt: skip
