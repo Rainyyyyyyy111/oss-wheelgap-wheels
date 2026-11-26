@@ -1272,6 +1272,29 @@ class WheelModules(unittest.TestCase):
         self.assertEqual(self.names("demo/__init__.py", "demo/x.data/y.py"),
                          {"modules": [], "packages": ["demo"]})  # fmt: skip
 
+    def test_wheel_import_names_validate_paths_and_count_extensions(self):
+        members = (
+            "demo/__init__.py",
+            "demo/x.data/__init__.py",
+            "demo/x.data/y.py",
+            "demo/class/x.py",
+            "demo/for.py",
+            "demo/dotted.stem.py",
+            "demo/x.y/_ext.cpython-314-x86_64-linux-gnu.so",
+            "demo/_invalid.stem.abi3.so",
+            "demo/_ok.abi3.so",
+        )
+        self.assertEqual(self.modules(*members), (["demo", "demo._ok"], ["demo._ok"], 3))
+        self.assertEqual(self.names(*members), {"modules": ["demo._ok"], "packages": ["demo"]})
+
+    def test_non_importable_extension_still_counts(self):
+        for member in (
+            "demo/x.y/_ext.cpython-314-x86_64-linux-gnu.so",
+            "demo/_invalid.stem.abi3.so",
+        ):
+            with self.subTest(member=member):
+                self.assertEqual(self.modules(member), ([], [], 1))
+
     def test_names_that_arent_dotted_identifiers_are_left_out(self):
         odd = ["demo/my-module.py", "demo/2fast.py", "my-pkg/__init__.py", "my-pkg/mod.py", "demo/_h-x.abi3.so",
                "demo/caf\u00e9.py"]  # fmt: skip

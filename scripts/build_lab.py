@@ -327,9 +327,18 @@ def wheel_modules(wheel: Path) -> tuple[list[str], list[str], int]:
     with zipfile.ZipFile(wheel) as z:
         entries = [e for e in z.namelist() if not e.split("/", 1)[0].endswith((".dist-info", ".data"))]
     extensions = []
+    counted = set()
+    dotted = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", re.ASCII)
     for e in entries:
         *parts, filename = e.split("/")
         stem, _, suffix = filename.rpartition(".")
+        tagged_so = re.search(r"\.(cpython-[^/]+|abi3t?|cp3\d+t?-[^/]+)\.so$", e)
+        if suffix != "pyd" and not tagged_so:
+            continue
+        # Keep the original count for the import check, even when an import name is rejected.
+        counted_name = ".".join([*parts, filename.split(".", 1)[0]])
+        if dotted.fullmatch(counted_name):
+            counted.add(counted_name)
         tag = _EXTENSION_TAG.search(stem)
         # A plain .so may be a shared library loaded via ctypes.
         if suffix == "pyd" or (suffix == "so" and tag):
@@ -350,7 +359,7 @@ def wheel_modules(wheel: Path) -> tuple[list[str], list[str], int]:
         if name and not any(p in ("tests", "test") for p in parts):
             modules.add(name)
     shallow = sorted(modules, key=lambda m: (m.count("."), m))
-    return shallow[:3], sorted(set(shipped))[:MAX_EXTENSIONS], len(set(extensions))
+    return shallow[:3], sorted(set(shipped))[:MAX_EXTENSIONS], len(counted)
 
 
 def wheel_names(wheel: Path) -> dict[str, list[str]]:
