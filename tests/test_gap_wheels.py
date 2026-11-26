@@ -1267,13 +1267,10 @@ class WheelModules(unittest.TestCase):
         self.assertEqual(self.modules("demo/__init__.py", *bare), (["demo"], [], 0))
         self.assertEqual(self.names("demo/__init__.py", *bare), {"modules": [], "packages": ["demo"]})
 
-    def test_a_folder_with_a_dot_in_its_name_reads_as_two_packages(self):
-        # Pinned as it is today, and probably wrong: `demo/x.data/y.py` can't be imported as demo.x.data.y. The
-        # name is checked after the parts are joined with dots, so a dot inside one part passes. Only the wheel's
-        # top folder is checked for `.dist-info` and `.data`.
-        self.assertEqual(self.modules("demo/__init__.py", "demo/x.data/y.py"), (["demo", "demo.x.data.y"], [], 0))
+    def test_a_folder_with_a_dot_in_its_name_is_ignored(self):
+        self.assertEqual(self.modules("demo/__init__.py", "demo/x.data/y.py"), (["demo"], [], 0))
         self.assertEqual(self.names("demo/__init__.py", "demo/x.data/y.py"),
-                         {"modules": ["demo.x.data.y"], "packages": ["demo"]})  # fmt: skip
+                         {"modules": [], "packages": ["demo"]})  # fmt: skip
 
     def test_names_that_arent_dotted_identifiers_are_left_out(self):
         odd = ["demo/my-module.py", "demo/2fast.py", "my-pkg/__init__.py", "my-pkg/mod.py", "demo/_h-x.abi3.so",
